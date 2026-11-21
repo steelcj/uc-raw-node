@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Check variable names and secret handling in uc-raw-node.
 
-Implements the CI check described under Variables in Raw Node Controller
-Layout Design v0.1.10:
+Implements the check described in the Raw Node Controller Layout Design
+(en/docs/design/raw-node-controller-layout-design-*.md), sections
+Variables (Naming, and Secret-handling rules in the check) and Repository
+checks:
 
 - Every name set by set_fact or register in tasks/, roles/ and the entry
   playbooks must match a row of the naming table, and be set only in a file
@@ -36,8 +38,9 @@ import sys
 
 import yaml
 
-# The naming table of layout design v0.1.10, with the transport output row
-# widened to raw_node_transport_* (raw_node_transport_state). Each row:
+# The naming table of the layout design
+# (en/docs/design/raw-node-controller-layout-design-*.md), section
+# Variables, Naming. Each row:
 # (what the table calls it, a regular expression for the names, the files
 # allowed to set them as glob patterns relative to the repository root).
 # A name may match several rows; it passes if any matching row allows the
