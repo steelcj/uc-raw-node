@@ -1,8 +1,16 @@
 ---
 # ansible-lint configuration for uc-raw-node.
 #
-# Only one rule is turned off, and nothing else may be skipped here: add a
-# narrow "# noqa: <rule>" with a reason on the line instead.
+# Only one rule is turned off and one directory excluded, and nothing else
+# may be skipped or excluded here: add a narrow "# noqa: <rule>" with a
+# reason on the line instead.
+#
+# spike/ holds cloud-init user-data (whose "#cloud-config" header must stay
+# exactly as written) and other non-Ansible files from the validation
+# spike. It is reference material, not controller code.
+exclude_paths:
+  - spike/
+
 #
 # var-naming[no-role-prefix] wants every variable a role sets or reads to
 # start with the full role name (raw_node_transport_incus_exec_,

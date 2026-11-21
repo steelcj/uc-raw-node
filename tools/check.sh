@@ -7,14 +7,14 @@
 # In order: tools/check_variables.py, ansible-playbook --syntax-check on
 # every playbook, then for the full check ansible-lint (if installed) and
 # the stand-in test suite. ansible-lint gates on the entry playbooks and
-# tasks/; the whole repository is linted as well, but only reported (the
-# cloud-init header of spike/spike-user-data.yml cannot satisfy
-# yaml[comments]; see the session record of 2026-11-21--12-42-01). The one
-# rule turned off for the repository is in .ansible-lint, with its reason.
+# tasks/; the whole repository is linted as well, but only reported. The
+# one rule turned off and the one directory excluded are in .ansible-lint,
+# with their reasons.
 # Every step runs even if an earlier one failed; each step prints one line
 # and the exit status is non-zero if any failed.
 #
-# Needs ansible-playbook on the PATH (or ANSIBLE_PLAYBOOK set to it). The
+# Needs ansible-playbook on the PATH (or ANSIBLE_PLAYBOOK set to it). If it
+# is not there, tools/check.env is sourced when it exists. The
 # variable check runs with the same Python as ansible-playbook, which has
 # PyYAML. Logs go to artifacts/check/. Run from anywhere in the repository.
 # This script is the authority for "is the repository healthy"; the git
@@ -32,9 +32,19 @@ esac
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root" || exit 2
 
+# Find ansible-playbook without guessing: ANSIBLE_PLAYBOOK if set, else the
+# PATH, else the PATH after sourcing tools/check.env (a gitignored sh file
+# for this host, for example PATH="$HOME/.venvs/ansible/bin:$PATH").
+if [ -z "${ANSIBLE_PLAYBOOK:-}" ] && ! command -v ansible-playbook >/dev/null 2>&1 \
+        && [ -f tools/check.env ]; then
+    # shellcheck source=/dev/null
+    . ./tools/check.env
+fi
 playbook=${ANSIBLE_PLAYBOOK:-$(command -v ansible-playbook || true)}
 if [ -z "$playbook" ] || [ ! -x "$playbook" ]; then
-    echo "check.sh: ansible-playbook not found. Activate the Ansible environment, or set ANSIBLE_PLAYBOOK." >&2
+    echo "check.sh: ansible-playbook not found on the PATH${ANSIBLE_PLAYBOOK:+ or at ANSIBLE_PLAYBOOK=$ANSIBLE_PLAYBOOK}." >&2
+    echo "check.sh: create tools/check.env (gitignored, sourced by sh) to put it on the PATH, for example:" >&2
+    echo "check.sh:     PATH=\"\$HOME/.venvs/ansible/bin:\$PATH\"" >&2
     exit 2
 fi
 bindir=$(dirname "$playbook")
