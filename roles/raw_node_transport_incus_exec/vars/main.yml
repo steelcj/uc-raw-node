@@ -1,0 +1,17 @@
+# roles/raw_node_transport_incus_exec/vars/main.yml
+#
+# Values the play must not override. Role vars outrank play vars and
+# vars_files (including the controller's vars/defaults.yml and any client
+# settings loaded that way) and inventory variables. Only set_fact, include
+# parameters and -e outrank them.
+
+# Adopting an instance that already exists is a deliberate operator
+# decision for one run, so it is off here and can only be turned on with
+# -e raw_node_incus_allow_existing=true. Shared settings such as a play's
+# vars_files cannot turn it on for every run by accident.
+raw_node_incus_allow_existing: false
+
+# The ownership marker. Set as Incus user keys when this transport launches
+# an instance, and required by tasks/destroy.yml before it deletes one.
+raw_node_incus_marker_created_key: user.uc-raw-node.created
+raw_node_incus_marker_hostname_key: user.uc-raw-node.hostname

@@ -1,26 +1,46 @@
+---
 # tests/transport_incus_exec.yml
 #
-# Runs registry validation, resolves incus_container_default, then delivers
-# a stand-in payload with raw_node_transport_incus_exec.
+# Runs registry validation, input checks, platform resolution and
+# prepare_paths.yml, stages a stand-in payload in the node's secrets
+# directory (as payload.yml will), then delivers it with
+# raw_node_transport_incus_exec. Every output path is under artifacts/
+# (tests/vars/output.yml). Run from the repository root.
 #
 # Against a real Incus host:
-#   ansible-playbook -i localhost, -c local tests/transport_incus_exec.yml
+#   ansible-playbook -i localhost, -c local tests/transport_incus_exec.yml \
+#     -e raw_node_incus_project=uc-raw-node-test -e raw_node_test_destroy=true
 #
-# Destroy the test instance afterwards with -e raw_node_test_destroy=true,
-# or by hand with: incus delete --force rn-test-incus-exec
+# With the stand-in client:
+#   PATH="$PWD/tests/bin:$PATH" ansible-playbook -i localhost, -c local \
+#     tests/transport_incus_exec.yml -e raw_node_test_destroy=true
+#
+# Without -e raw_node_test_destroy=true the test instance is kept; destroy it
+# with destroy.yml, or by hand with: incus delete --force rn-test-incus-exec
+#
+# A second case launches a plain instance without the ownership marker,
+# under the name <hostname>-foreign, and checks that the transport neither
+# adopts it nor deletes it, in a build run or a standalone teardown. The
+# test deletes that instance itself at the end.
 
 - name: Test raw_node_transport_incus_exec
   hosts: localhost
+  connection: local
   gather_facts: false
+
   vars_files:
     - ../vars/defaults.yml
     - vars/output.yml
+
   vars:
     target_platform: incus_container_default
     raw_node_input_file: "{{ playbook_dir }}/fixtures/raw-node-input.yml"
-    raw_node_artifacts_dir: "{{ playbook_dir }}/../artifacts/{{ raw_node_hostname }}"
-    raw_node_payload_file: "{{ playbook_dir }}/fixtures/raw-node-firstboot"
+    raw_node_test_payload_fixture: "{{ playbook_dir }}/fixtures/raw-node-firstboot"
     raw_node_test_destroy: false
+    raw_node_test_incus_bin: "{{ raw_node_incus_bin | default('incus') }}"
+    raw_node_test_project: "{{ raw_node_incus_project | default('default') }}"
+    raw_node_test_image: "{{ raw_node_incus_image | default('images:debian/13') }}"
+
   tasks:
     - name: Load and validate the registry
       ansible.builtin.include_tasks: ../tasks/validate_registry.yml
@@ -31,22 +51,187 @@
     - name: Resolve the target platform
       ansible.builtin.include_tasks: ../tasks/resolve_platform.yml
 
-    - name: Ensure artifacts directory exists
-      ansible.builtin.file:
-        path: "{{ raw_node_artifacts_dir }}"
-        state: directory
-        mode: "0700"
+    - name: Prepare output paths
+      ansible.builtin.include_tasks: ../tasks/prepare_paths.yml
 
-    - name: Deliver through transport
-      ansible.builtin.include_role:
-        name: "raw_node_transport_{{ raw_node_platform.transport }}"
+    - name: Set the foreign instance name
+      ansible.builtin.set_fact:
+        raw_node_test_foreign: "{{ raw_node_hostname }}-foreign"
 
-    - name: Show transport result
-      ansible.builtin.debug:
-        var: raw_node_transport_result
+    - name: Run the transport cases
+      block:
+        - name: Stage the stand-in payload in the node's secrets directory
+          ansible.builtin.copy:
+            src: "{{ raw_node_test_payload_fixture }}"
+            dest: "{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}/raw-node-firstboot"
+            mode: "0600"
+          no_log: true
 
-    - name: Destroy test instance
-      ansible.builtin.include_role:
-        name: raw_node_transport_incus_exec
-        tasks_from: destroy.yml
-      when: raw_node_test_destroy | bool
+        # Case 1: build a node
+
+        - name: Deliver through transport
+          ansible.builtin.include_role:
+            name: "raw_node_transport_{{ raw_node_platform.transport }}"
+
+        - name: Show transport result
+          ansible.builtin.debug:
+            var: raw_node_transport_result
+
+        - name: Look at the run log
+          ansible.builtin.stat:
+            path: "{{ raw_node_transport_result.log }}"
+          register: raw_node_test_log
+
+        - name: Look up the instance's ownership marker
+          ansible.builtin.command:
+            argv:
+              - "{{ raw_node_test_incus_bin }}"
+              - list
+              - "--project={{ raw_node_test_project }}"
+              - --format=json
+          register: raw_node_test_list
+          changed_when: false
+
+        - name: Check the build
+          ansible.builtin.assert:
+            that:
+              - raw_node_transport_result.created | bool
+              - raw_node_transport_result.payload_rc | int == 0
+              - raw_node_transport_result.ipv4 | length > 0
+              - raw_node_test_log.stat.exists
+              - raw_node_test_log.stat.mode == '0600'
+              - raw_node_transport_result.log is match(raw_node_logs_dir | regex_escape)
+              - raw_node_test_config['user.uc-raw-node.created'] | default('') == 'true'
+              - raw_node_test_config['user.uc-raw-node.hostname'] | default('') == raw_node_hostname
+            quiet: true
+          vars:
+            raw_node_test_config: >-
+              {{ (raw_node_test_list.stdout | from_json
+                  | selectattr('name', 'equalto', raw_node_hostname) | first).config | default({}) }}
+
+        - name: Destroy test instance
+          ansible.builtin.include_role:
+            name: raw_node_transport_incus_exec
+            tasks_from: destroy
+          when: raw_node_test_destroy | bool
+
+        - name: Look up instances after teardown
+          ansible.builtin.command:
+            argv:
+              - "{{ raw_node_test_incus_bin }}"
+              - list
+              - "--project={{ raw_node_test_project }}"
+              - --format=json
+          register: raw_node_test_list
+          changed_when: false
+          when: raw_node_test_destroy | bool
+
+        - name: Check the test instance is gone
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_list.stdout | from_json | selectattr('name', 'equalto', raw_node_hostname) | list | length == 0
+            fail_msg: Instance {{ raw_node_hostname }} still exists after teardown.
+            quiet: true
+          when: raw_node_test_destroy | bool
+
+        # Case 2: an instance without the ownership marker is neither adopted
+        # nor deleted
+
+        - name: Launch a plain instance without the ownership marker
+          ansible.builtin.command:
+            argv:
+              - "{{ raw_node_test_incus_bin }}"
+              - launch
+              - "{{ raw_node_test_image }}"
+              - "{{ raw_node_test_foreign }}"
+              - "--project={{ raw_node_test_project }}"
+          register: raw_node_test_foreign_launch
+
+        - name: Try to build on the plain instance
+          block:
+            - name: Deliver through transport to the plain instance
+              ansible.builtin.include_role:
+                name: raw_node_transport_incus_exec
+              vars:
+                raw_node_hostname: "{{ raw_node_test_foreign }}"
+                raw_node_payload_file: "{{ raw_node_test_payload_fixture }}"
+
+            - name: Note that the transport adopted the instance
+              ansible.builtin.set_fact:
+                raw_node_test_foreign_build: adopted
+          rescue:
+            - name: Note that the transport refused
+              ansible.builtin.set_fact:
+                raw_node_test_foreign_build: refused
+                raw_node_test_foreign_build_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Tear down after the refused build, as the rescue path would
+          ansible.builtin.include_role:
+            name: raw_node_transport_incus_exec
+            tasks_from: destroy
+          vars:
+            raw_node_hostname: "{{ raw_node_test_foreign }}"
+
+        - name: Try a standalone teardown of the plain instance
+          block:
+            - name: Tear down the plain instance as destroy.yml would
+              ansible.builtin.include_role:
+                name: raw_node_transport_incus_exec
+                tasks_from: destroy
+              vars:
+                raw_node_hostname: "{{ raw_node_test_foreign }}"
+                raw_node_destroy_standalone: true
+
+            - name: Note that the standalone teardown deleted the instance
+              ansible.builtin.set_fact:
+                raw_node_test_foreign_destroy: deleted
+          rescue:
+            - name: Note that the standalone teardown refused
+              ansible.builtin.set_fact:
+                raw_node_test_foreign_destroy: refused
+                raw_node_test_foreign_destroy_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Look up the plain instance
+          ansible.builtin.command:
+            argv:
+              - "{{ raw_node_test_incus_bin }}"
+              - list
+              - "--project={{ raw_node_test_project }}"
+              - --format=json
+          register: raw_node_test_list
+          changed_when: false
+
+        - name: Check the plain instance was neither adopted nor deleted
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_foreign_build == 'refused'
+              - "'already exists' in raw_node_test_foreign_build_msg"
+              - raw_node_test_foreign_destroy == 'refused'
+              - "'ownership marker' in raw_node_test_foreign_destroy_msg"
+              - raw_node_test_foreign_entry | length == 1
+              - (raw_node_test_foreign_entry | first).config['user.uc-raw-node.created'] is not defined
+            quiet: true
+          vars:
+            raw_node_test_foreign_entry: >-
+              {{ raw_node_test_list.stdout | from_json
+                 | selectattr('name', 'equalto', raw_node_test_foreign) | list }}
+
+      always:
+        - name: Delete the plain instance by hand
+          ansible.builtin.command:
+            argv:
+              - "{{ raw_node_test_incus_bin }}"
+              - delete
+              - --force
+              - "--project={{ raw_node_test_project }}"
+              - "{{ raw_node_test_foreign }}"
+          environment:
+            FAKE_INCUS_ALLOW_UNMARKED_DELETE: "1"
+          when: raw_node_test_foreign_launch is defined and raw_node_test_foreign_launch is succeeded
+          failed_when: false
+
+        - name: Remove the staged payload
+          ansible.builtin.file:
+            path: "{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}/raw-node-firstboot"
+            state: absent
+          no_log: true

@@ -1,0 +1,79 @@
+# roles/raw_node_transport_incus_exec/tasks/address.yml
+#
+# Reports the instance's global addresses and SSH host public keys. Called
+# by main.yml after launch, and by the controller's wait_phone_home.yml with
+# tasks_from: address.
+#
+# Waits up to raw_node_incus_address_timeout seconds for the instance to be
+# running with at least one global address. Does not fail on timeout: it
+# sets raw_node_transport_address and leaves the decision to the caller,
+# which knows what the wait was for.
+#
+# Sets raw_node_transport_address:
+#   found          true if the instance was running with a global address
+#   ipv4, ipv6     lists of global addresses, interfaces other than lo
+#   ssh_host_keys  lines of /etc/ssh/ssh_host_*_key.pub, empty if none
+#   waited         seconds the wait was bounded by
+
+- name: Wait for instance to run with a global address
+  ansible.builtin.command:
+    argv:
+      - "{{ raw_node_incus_bin }}"
+      - list
+      - "{{ raw_node_incus_instance }}"
+      - "--project={{ raw_node_incus_project }}"
+      - --format=json
+  register: raw_node_incus_state
+  changed_when: false
+  failed_when: false
+  until: >-
+    raw_node_incus_state.rc == 0
+    and (raw_node_incus_state.stdout | from_json
+         | selectattr('name', 'equalto', raw_node_incus_instance)
+         | selectattr('status', 'equalto', 'Running')
+         | map(attribute='state.network') | map('default', {}, true)
+         | map('dict2items') | flatten
+         | rejectattr('key', 'equalto', 'lo')
+         | map(attribute='value.addresses') | flatten
+         | selectattr('scope', 'equalto', 'global') | list | length) > 0
+  retries: "{{ [((raw_node_incus_address_timeout | int) / 5) | round(0, 'ceil') | int, 1] | max }}"
+  delay: 5
+
+- name: Set instance addresses
+  ansible.builtin.set_fact:
+    raw_node_incus_addresses: >-
+      {{ (raw_node_incus_state.stdout | from_json
+          | selectattr('name', 'equalto', raw_node_incus_instance)
+          | map(attribute='state.network') | map('default', {}, true)
+          | map('dict2items') | flatten
+          | rejectattr('key', 'equalto', 'lo')
+          | map(attribute='value.addresses') | flatten
+          | selectattr('scope', 'equalto', 'global') | list)
+         if raw_node_incus_state.rc == 0 else [] }}
+
+- name: Read SSH host public keys
+  ansible.builtin.command:
+    argv:
+      - "{{ raw_node_incus_bin }}"
+      - exec
+      - "{{ raw_node_incus_instance }}"
+      - "--project={{ raw_node_incus_project }}"
+      - --
+      - sh
+      - -c
+      - "cat /etc/ssh/ssh_host_*_key.pub 2>/dev/null; exit 0"
+  register: raw_node_incus_host_keys
+  changed_when: false
+  failed_when: false
+  when: raw_node_incus_addresses | length > 0
+
+- name: Report the instance address
+  ansible.builtin.set_fact:
+    raw_node_transport_address:
+      found: "{{ raw_node_incus_addresses | length > 0 }}"
+      ipv4: "{{ raw_node_incus_addresses | selectattr('family', 'equalto', 'inet') | map(attribute='address') | list }}"
+      ipv6: "{{ raw_node_incus_addresses | selectattr('family', 'equalto', 'inet6') | map(attribute='address') | list }}"
+      ssh_host_keys: >-
+        {{ (raw_node_incus_host_keys.stdout_lines | default([]))
+           | select('match', '^(ssh-|ecdsa-|sk-)') | list }}
+      waited: "{{ raw_node_incus_address_timeout | int }}"

@@ -3,31 +3,47 @@
 # Delivers raw-node-firstboot to an Incus instance with incus file push and
 # runs it once with incus exec. Runs on the controller host, which has the
 # incus client configured.
+#
+# Reads the payload from the node's secrets directory and writes the run log
+# to the node's logs directory. Tasks that touch the payload carry no_log;
+# when one of them fails, the next task sets raw_node_failure_reason from
+# safe fields only (step, exit code, log path) and fails with it.
+
+- name: Start with no instance launched by this run
+  ansible.builtin.set_fact:
+    raw_node_incus_launched: false
+    raw_node_incus_adopted: false
 
 - name: Check transport inputs
   ansible.builtin.assert:
     that:
       - raw_node_platform is defined
       - raw_node_platform.transport == 'incus_exec'
+      - raw_node_hostname is defined
       - raw_node_incus_instance is string and raw_node_incus_instance | length > 0
       - raw_node_incus_payload_dest is match('^/')
+      - raw_node_logs_dir is defined
     fail_msg: >-
       raw_node_transport_incus_exec needs raw_node_platform with transport
-      incus_exec, a non-empty raw_node_incus_instance (usually from
-      raw_node_hostname) and an absolute raw_node_incus_payload_dest.
+      incus_exec, raw_node_hostname, a non-empty raw_node_incus_instance
+      (usually from raw_node_hostname), an absolute raw_node_incus_payload_dest
+      and the expanded output paths from prepare_paths.yml.
     quiet: true
 
 - name: Check payload exists on the controller
   ansible.builtin.stat:
     path: "{{ raw_node_payload_file }}"
   register: raw_node_incus_payload_stat
+  no_log: true
 
 - name: Assert payload exists
   ansible.builtin.assert:
     that:
       - raw_node_incus_payload_stat.stat.exists
       - raw_node_incus_payload_stat.stat.isreg
-    fail_msg: "Payload {{ raw_node_payload_file }} not found. payload.yml must run before the transport."
+    fail_msg: >-
+      No payload in the node's secrets directory. payload.yml must run
+      before the transport.
     quiet: true
 
 - name: Look up instance
@@ -53,8 +69,8 @@
       - not (raw_node_incus_existed | bool) or (raw_node_incus_allow_existing | bool)
     fail_msg: >-
       Instance '{{ raw_node_incus_instance }}' already exists in project
-      '{{ raw_node_incus_project }}'. Set raw_node_incus_allow_existing to
-      true to adopt it deliberately.
+      '{{ raw_node_incus_project }}'. It was not touched. Set
+      raw_node_incus_allow_existing to true (-e) to adopt it deliberately.
     quiet: true
 
 - name: Refuse to continue when the instance is missing and creation is off
@@ -64,37 +80,41 @@
     fail_msg: "Instance '{{ raw_node_incus_instance }}' does not exist and raw_node_incus_create is false."
     quiet: true
 
-- name: Launch instance
+- name: Note that an existing instance is adopted
+  ansible.builtin.set_fact:
+    raw_node_incus_adopted: true
+  when: raw_node_incus_existed | bool
+
+# Set before the command runs, so a launch that fails after Incus created
+# the instance is still treated as this run's instance by destroy.yml. The
+# ownership marker is set atomically with the launch.
+- name: Note that this run launches the instance
+  ansible.builtin.set_fact:
+    raw_node_incus_launched: true
+  when: not (raw_node_incus_existed | bool)
+
+- name: Launch instance with the ownership marker
   ansible.builtin.command:
     argv: >-
       {{ [raw_node_incus_bin, 'launch', raw_node_incus_image, raw_node_incus_instance,
           '--project=' ~ raw_node_incus_project]
-         + (raw_node_incus_profiles | map('regex_replace', '^', '--profile=') | list) }}
+         + (raw_node_incus_profiles | map('regex_replace', '^', '--profile=') | list)
+         + ['--config', raw_node_incus_marker_created_key ~ '=true',
+            '--config', raw_node_incus_marker_hostname_key ~ '=' ~ raw_node_hostname] }}
   when: not (raw_node_incus_existed | bool)
   register: raw_node_incus_launch
 
-- name: Wait for instance to run with a global address
-  ansible.builtin.command:
-    argv:
-      - "{{ raw_node_incus_bin }}"
-      - list
-      - "{{ raw_node_incus_instance }}"
-      - "--project={{ raw_node_incus_project }}"
-      - --format=json
-  register: raw_node_incus_state
-  changed_when: false
-  until: >-
-    (raw_node_incus_state.stdout | from_json
-     | selectattr('name', 'equalto', raw_node_incus_instance) | list | length > 0)
-    and ((raw_node_incus_state.stdout | from_json
-          | selectattr('name', 'equalto', raw_node_incus_instance) | first).status == 'Running')
-    and (((raw_node_incus_state.stdout | from_json
-          | selectattr('name', 'equalto', raw_node_incus_instance) | first).state.network | default({}, true)
-          | dict2items | rejectattr('key', 'equalto', 'lo')
-          | map(attribute='value.addresses') | flatten
-          | selectattr('scope', 'equalto', 'global') | list | length) > 0)
-  retries: "{{ (raw_node_incus_wait_timeout | int / 5) | round(0, 'ceil') | int }}"
-  delay: 5
+- name: Wait for instance address
+  ansible.builtin.include_tasks: address.yml
+  vars:
+    raw_node_incus_address_timeout: "{{ raw_node_incus_wait_timeout }}"
+
+- name: Fail if the instance did not come up
+  ansible.builtin.fail:
+    msg: >-
+      Instance '{{ raw_node_incus_instance }}' was not running with a global
+      address within {{ raw_node_incus_wait_timeout }} seconds.
+  when: not (raw_node_transport_address.found | bool)
 
 - name: Wait for init system to settle
   ansible.builtin.command:
@@ -121,6 +141,24 @@
       - --gid=0
       - "{{ raw_node_payload_file }}"
       - "{{ raw_node_incus_instance }}{{ raw_node_incus_payload_dest }}"
+  register: raw_node_incus_push
+  failed_when: false
+  no_log: true
+
+- name: Fail with a safe reason if the push failed
+  when: raw_node_incus_push.rc | default(1) != 0
+  block:
+    - name: Set failure reason for the push
+      ansible.builtin.set_fact:
+        raw_node_failure_reason: >-
+          raw_node_transport_incus_exec step 'Push payload' failed with exit
+          code {{ raw_node_incus_push.rc | default('unknown') }} for instance
+          '{{ raw_node_incus_instance }}'. Output hidden because it may
+          contain the payload path.
+
+    - name: Fail on push
+      ansible.builtin.fail:
+        msg: "{{ raw_node_failure_reason }}"
 
 - name: Run payload once
   ansible.builtin.command:
@@ -133,6 +171,7 @@
       - "{{ raw_node_incus_payload_dest }}"
   register: raw_node_incus_run
   failed_when: false
+  no_log: true
 
 - name: Remove staged payload
   ansible.builtin.command:
@@ -147,16 +186,19 @@
       - "{{ raw_node_incus_payload_dest }}"
   changed_when: false
 
-- name: Save payload output with the artifacts
+# The payload's own output rules keep contract values and the token out of
+# its output, so the log keeps it. no_log keeps it off the console.
+- name: Save payload output to the logs directory
   ansible.builtin.copy:
-    dest: "{{ raw_node_artifacts_dir }}/incus_exec-run.log"
+    dest: "{{ raw_node_incus_run_log }}"
     mode: "0600"
     content: |
-      rc: {{ raw_node_incus_run.rc }}
+      rc: {{ raw_node_incus_run.rc | default('unknown') }}
       --- stdout ---
-      {{ raw_node_incus_run.stdout }}
+      {{ raw_node_incus_run.stdout | default('') }}
       --- stderr ---
-      {{ raw_node_incus_run.stderr }}
+      {{ raw_node_incus_run.stderr | default('') }}
+  no_log: true
 
 - name: Record transport result
   ansible.builtin.set_fact:
@@ -164,22 +206,23 @@
       transport: incus_exec
       instance: "{{ raw_node_incus_instance }}"
       project: "{{ raw_node_incus_project }}"
-      created: "{{ not (raw_node_incus_existed | bool) }}"
-      payload_rc: "{{ raw_node_incus_run.rc }}"
-      ipv4: "{{ raw_node_incus_addresses | selectattr('family', 'equalto', 'inet') | map(attribute='address') | list }}"
-      ipv6: "{{ raw_node_incus_addresses | selectattr('family', 'equalto', 'inet6') | map(attribute='address') | list }}"
-  vars:
-    raw_node_incus_addresses: >-
-      {{ (raw_node_incus_state.stdout | from_json
-          | selectattr('name', 'equalto', raw_node_incus_instance) | first).state.network
-         | default({}, true) | dict2items | rejectattr('key', 'equalto', 'lo')
-         | map(attribute='value.addresses') | flatten
-         | selectattr('scope', 'equalto', 'global') | list }}
+      created: "{{ raw_node_incus_launched | bool }}"
+      payload_rc: "{{ raw_node_incus_run.rc | default('unknown') }}"
+      ipv4: "{{ raw_node_transport_address.ipv4 }}"
+      ipv6: "{{ raw_node_transport_address.ipv6 }}"
+      log: "{{ raw_node_incus_run_log }}"
 
-- name: Fail if payload failed
-  ansible.builtin.fail:
-    msg: >-
-      raw-node-firstboot exited with {{ raw_node_incus_run.rc }} in
-      '{{ raw_node_incus_instance }}'. Output saved to
-      {{ raw_node_artifacts_dir }}/incus_exec-run.log.
-  when: raw_node_incus_run.rc != 0
+- name: Fail with a safe reason if the payload failed
+  when: raw_node_incus_run.rc | default(1) != 0
+  block:
+    - name: Set failure reason for the payload run
+      ansible.builtin.set_fact:
+        raw_node_failure_reason: >-
+          raw_node_transport_incus_exec step 'Run payload once':
+          raw-node-firstboot exited with {{ raw_node_incus_run.rc | default('unknown') }}
+          in instance '{{ raw_node_incus_instance }}'. Output is in
+          {{ raw_node_incus_run_log }}.
+
+    - name: Fail on payload
+      ansible.builtin.fail:
+        msg: "{{ raw_node_failure_reason }}"

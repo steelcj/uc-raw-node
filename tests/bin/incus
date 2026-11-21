@@ -1,35 +1,117 @@
 #!/usr/bin/env python3
 # Minimal stand-in for the incus client, for testing the transport role
-# where no Incus host is available. State lives in $FAKE_INCUS_STATE.
-import json, os, sys, subprocess
-state_file = os.environ.get("FAKE_INCUS_STATE", "/tmp/fake-incus.json")
+# where no Incus host is available. It checks the role's logic and command
+# sequence, not real Incus behaviour.
+#
+# State lives in $FAKE_INCUS_STATE, by default artifacts/fake-incus.json in
+# the repository, so tests write nothing outside artifacts/.
+#
+# Behaviour worth knowing:
+#   - launch records --config key=value pairs as the instance's config,
+#     and list shows them, as real Incus does.
+#   - delete refuses an instance without user.uc-raw-node.created=true,
+#     unless FAKE_INCUS_ALLOW_UNMARKED_DELETE=1 (test cleanup only). This
+#     catches a transport that would delete an instance it did not create.
+#   - delete fails when FAKE_INCUS_FAIL_DELETE=1 or the file
+#     $FAKE_INCUS_STATE.fail-delete exists, to test quarantine.
+#   - exec of a pushed file runs it locally with sh, and records the copy
+#     it ran in the instance's files; the payload's staging copy is the
+#     controller file itself.
+#   - exec of the SSH host key command prints one stand-in host key.
+import json
+import os
+import subprocess
+import sys
+
+here = os.path.dirname(os.path.abspath(__file__))
+default_state = os.path.join(here, "..", "..", "artifacts", "fake-incus.json")
+state_file = os.environ.get("FAKE_INCUS_STATE", default_state)
+os.makedirs(os.path.dirname(os.path.abspath(state_file)), exist_ok=True)
 state = json.load(open(state_file)) if os.path.exists(state_file) else {}
-a = [x for x in sys.argv[1:] if not x.startswith("--project")]
-def save(): json.dump(state, open(state_file, "w"))
+
+argv = sys.argv[1:]
+configs = []
+args = []
+i = 0
+while i < len(argv):
+    x = argv[i]
+    if x == "--config":
+        configs.append(argv[i + 1])
+        i += 2
+        continue
+    if not x.startswith("--project"):
+        args.append(x)
+    i += 1
+
+
+def save():
+    json.dump(state, open(state_file, "w"), indent=1)
+
+
 def inst(n):
-    return {"name": n, "status": "Running", "state": {"network": {
-        "lo": {"addresses": [{"family": "inet", "address": "127.0.0.1", "scope": "local"}]},
-        "eth0": {"addresses": [{"family": "inet", "address": "10.10.10.5", "scope": "global"},
-                               {"family": "inet6", "address": "fd42::5", "scope": "global"}]}}}}
-cmd = a[0]
+    return {
+        "name": n,
+        "status": "Running",
+        "config": state[n].get("config", {}),
+        "state": {"network": {
+            "lo": {"addresses": [{"family": "inet", "address": "127.0.0.1", "scope": "local"}]},
+            "eth0": {"addresses": [
+                {"family": "inet", "address": "10.10.10.5", "scope": "global"},
+                {"family": "inet6", "address": "fd42::5", "scope": "global"}]}}},
+    }
+
+
+def fail(msg, rc=1):
+    print("Error: " + msg, file=sys.stderr)
+    sys.exit(rc)
+
+
+cmd = args[0]
 if cmd == "list":
-    names = [x for x in a[1:] if not x.startswith("--")]
-    out = [inst(n) for n in state if not names or n.startswith(names[0])]
-    print(json.dumps(out))
+    names = [x for x in args[1:] if not x.startswith("--")]
+    print(json.dumps([inst(n) for n in state if not names or n.startswith(names[0])]))
 elif cmd == "launch":
-    state[a[2]] = {"image": a[1], "files": {}}; save()
-elif cmd == "file" and a[1] == "push":
-    src, dst = [x for x in a[2:] if not x.startswith("--")]
+    image, name = [x for x in args[1:] if not x.startswith("--")][:2]
+    if name in state:
+        fail("Instance %s already exists" % name)
+    state[name] = {"image": image, "files": {},
+                   "config": dict(c.split("=", 1) for c in configs)}
+    save()
+elif cmd == "file" and args[1] == "push":
+    src, dst = [x for x in args[2:] if not x.startswith("--")]
     n, path = dst.split("/", 1)
-    state[n]["files"]["/" + path] = src; save()
+    if n not in state:
+        fail("Instance not found")
+    state[n]["files"]["/" + path] = src
+    save()
 elif cmd == "exec":
-    n = a[1]; rest = a[a.index("--") + 1:]
-    if rest[0] == "sh": sys.exit(0)
-    if rest[0] == "rm": state[n]["files"].pop(rest[-1], None); save(); sys.exit(0)
+    n = args[1]
+    if n not in state:
+        fail("Instance not found")
+    rest = argv[argv.index("--") + 1:]
+    if rest[0] == "sh":
+        if "ssh_host_" in rest[-1]:
+            print("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIStandInHostKey000000000000000000000000000 root@" + n)
+        sys.exit(0)
+    if rest[0] == "rm":
+        state[n]["files"].pop(rest[-1], None)
+        save()
+        sys.exit(0)
     src = state[n]["files"].get(rest[0])
-    if not src: print("not found", file=sys.stderr); sys.exit(127)
-    sys.exit(subprocess.call([src]))
+    if not src:
+        fail("not found", 127)
+    sys.exit(subprocess.call(["sh", src]))
 elif cmd == "delete":
-    state.pop(a[-1], None); save()
+    name = args[-1]
+    if (os.environ.get("FAKE_INCUS_FAIL_DELETE") == "1"
+            or os.path.exists(state_file + ".fail-delete")):
+        fail("stand-in delete failure (FAKE_INCUS_FAIL_DELETE=1)")
+    if name not in state:
+        fail("Instance not found")
+    if (state[name].get("config", {}).get("user.uc-raw-node.created") != "true"
+            and os.environ.get("FAKE_INCUS_ALLOW_UNMARKED_DELETE") != "1"):
+        fail("stand-in refuses to delete %s: no user.uc-raw-node.created key" % name)
+    state.pop(name)
+    save()
 else:
-    print("fake incus: unsupported", a, file=sys.stderr); sys.exit(2)
+    fail("fake incus: unsupported %s" % args, 2)

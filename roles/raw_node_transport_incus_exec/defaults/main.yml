@@ -1,7 +1,12 @@
 # roles/raw_node_transport_incus_exec/defaults/main.yml
+#
+# Advisory defaults: the controller loads vars/defaults.yml through play
+# vars_files, which outranks role defaults, so any of these can be replaced
+# by the play or with -e. Values the play must not override are in
+# vars/main.yml.
 
 # Instance name. raw_node_hostname is set by the controller from the
-# hostname field of raw-node-input.yml.
+# hostname field of the contract input.
 raw_node_incus_instance: "{{ raw_node_hostname }}"
 
 # Image used when the instance does not exist yet. A default (non-/cloud)
@@ -12,17 +17,23 @@ raw_node_incus_project: default
 raw_node_incus_profiles:
   - default
 
-# Create the instance if it does not exist. If it already exists, the role
-# refuses to touch it unless raw_node_incus_allow_existing is true, so an
-# unrelated container is never adopted by accident.
+# Create the instance if it does not exist.
 raw_node_incus_create: true
-raw_node_incus_allow_existing: false
 
-# Seconds to wait for the instance to be running with a global address.
+# Seconds main.yml waits for the instance to be running with a global
+# address.
 raw_node_incus_wait_timeout: 120
 
-# The payload rendered by the controller's payload.yml.
-raw_node_payload_file: "{{ raw_node_artifacts_dir }}/raw-node-firstboot"
+# Seconds address.yml waits when the controller's wait_phone_home.yml calls
+# it. main.yml passes raw_node_incus_wait_timeout instead.
+raw_node_incus_address_timeout: "{{ raw_node_report_timeout | default(raw_node_incus_wait_timeout) }}"
+
+# The payload rendered by the controller's payload.yml, in the node's
+# secrets directory (raw_node_secrets_dir is set by prepare_paths.yml).
+raw_node_payload_file: "{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}/raw-node-firstboot"
+
+# Where the payload's exit code and output are saved.
+raw_node_incus_run_log: "{{ raw_node_logs_dir }}/{{ raw_node_hostname }}/incus_exec-run.log"
 
 # Where the payload is placed inside the instance before it runs.
 raw_node_incus_payload_dest: /root/raw-node-firstboot
