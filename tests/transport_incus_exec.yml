@@ -12,6 +12,9 @@
 - name: Test raw_node_transport_incus_exec
   hosts: localhost
   gather_facts: false
+  vars_files:
+    - ../vars/defaults.yml
+    - vars/output.yml
   vars:
     target_platform: incus_container_default
     raw_node_input_file: "{{ playbook_dir }}/fixtures/raw-node-input.yml"
@@ -20,22 +23,13 @@
     raw_node_test_destroy: false
   tasks:
     - name: Load and validate the registry
-      ansible.builtin.include_role:
-        name: raw_node_controller
-        tasks_from: validate_registry.yml
-        public: true
+      ansible.builtin.include_tasks: ../tasks/validate_registry.yml
 
     - name: Load and check the contract input
-      ansible.builtin.include_role:
-        name: raw_node_controller
-        tasks_from: load_input.yml
-        public: true
+      ansible.builtin.include_tasks: ../tasks/load_input.yml
 
     - name: Resolve the target platform
-      ansible.builtin.include_role:
-        name: raw_node_controller
-        tasks_from: resolve_platform.yml
-        public: true
+      ansible.builtin.include_tasks: ../tasks/resolve_platform.yml
 
     - name: Ensure artifacts directory exists
       ansible.builtin.file:

@@ -1,0 +1,24 @@
+---
+# Registry and input checks only: validate the registry, load and check the
+# contract input, and resolve the target platform. Nothing is built and no
+# output directory is created. These are the first three tasks of build.yml.
+#
+#   ansible-playbook validate.yml -e @raw-node-input.yml -e target_platform=<key>
+
+- name: Validate registry, input and platform
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/defaults.yml
+
+  tasks:
+    - name: Validate registry
+      ansible.builtin.include_tasks: tasks/validate_registry.yml
+
+    - name: Load and check contract input
+      ansible.builtin.include_tasks: tasks/load_input.yml
+
+    - name: Resolve platform
+      ansible.builtin.include_tasks: tasks/resolve_platform.yml

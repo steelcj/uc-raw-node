@@ -1,0 +1,12 @@
+# tests/vars/output.yml
+#
+# Listed after ../vars/defaults.yml in the test playbooks' vars_files, so it
+# wins without -e. Points every output path, including the secrets path, into
+# artifacts/, which is ignored by git. Tests are run from the repository root.
+
+raw_node_root: "{{ playbook_dir }}/.."
+
+raw_node_records_path: "{{ raw_node_root }}/artifacts/records"
+raw_node_reports_path: "{{ raw_node_root }}/artifacts/reports"
+raw_node_logs_path: "{{ raw_node_root }}/artifacts/logs"
+raw_node_secrets_path: "{{ raw_node_root }}/artifacts/secrets"

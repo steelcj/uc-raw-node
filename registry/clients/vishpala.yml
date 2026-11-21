@@ -1,0 +1,14 @@
+# registry/clients/vishpala.yml
+#
+# Client layer for Vishpala. A client layer is merged over the base registry
+# (registry/base.yml) to add platforms that only this client uses, or to
+# change or retire base entries for this client: later layers win, lists are
+# replaced, and an entry is retired by setting its status to excluded rather
+# than deleting it. It is not loaded by default; add it to
+# raw_node_registry_files to use it, for example:
+#
+#   -e '{"raw_node_registry_files": ["registry/base.yml", "registry/clients/vishpala.yml"]}'
+#
+# Empty for now. The loader requires a mapping with a single platforms key.
+
+platforms: {}
