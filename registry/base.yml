@@ -57,7 +57,10 @@ platforms:
     reports_address: true
     phone_home: optional
     firewall_clause: check
-    notes: "Default image variants lack cloud-init; raw-node-firstboot is pushed and run with incus file push and incus exec. First priority for implementation."
+    notes: >-
+      Default image variants lack cloud-init; raw-node-firstboot is pushed and
+      run with incus file push and incus exec. First priority for
+      implementation.
 
   # VPS without user-data
 
@@ -68,7 +71,10 @@ platforms:
     reports_address: false
     firewall_clause: check
     vps_modes: [ssh_only]
-    notes: "Reinstall the provider template from the panel before adopting. Teardown is manual. firewall_clause is check because some SSH-only products are container-based."
+    notes: >-
+      Reinstall the provider template from the panel before adopting. Teardown
+      is manual. firewall_clause is check because some SSH-only products are
+      container-based.
 
   # EX2
 
@@ -113,7 +119,10 @@ platforms:
     transport: rescue_ssh
     can_destroy: false
     reports_address: true
-    notes: "Hosted dedicated server or VPS booted into the provider's rescue system. Image deployed with dd, rsync or installimage. The address is known because the controller connects to the rescue system."
+    notes: >-
+      Hosted dedicated server or VPS booted into the provider's rescue system.
+      Image deployed with dd, rsync or installimage. The address is known
+      because the controller connects to the rescue system.
 
   # Air-gapped
 

@@ -9,7 +9,7 @@ The role runs on the controller host, which must have the `incus` client configu
 | File | Called by | Does |
 | :-- | :-- | :-- |
 | `tasks/main.yml` | `build.yml` (`include_role`) | Launches or adopts the instance, delivers and runs the payload |
-| `tasks/address.yml` | `main.yml`, and the controller's `wait_phone_home.yml` with `tasks_from: address` | Reports the instance's global addresses and SSH host public keys |
+| `tasks/address.yml` | `main.yml`, and the controller's `wait_phone_home.yml` with `tasks_from: address` and `raw_node_transport_address_timeout` | Reports the instance's global addresses and SSH host public keys |
 | `tasks/destroy.yml` | The controller's `handle_failure.yml` and `destroy.yml`, with `tasks_from: destroy` | Deletes the instance, if this controller created it |
 
 ## What main.yml does
@@ -22,6 +22,18 @@ The role runs on the controller host, which must have the `incus` client configu
 - Sets `raw_node_transport_result` (instance, project, whether this run created it, payload exit code, IPv4 and IPv6 global addresses, log path) and fails if the payload exited non-zero.
 
 The push and the run carry `no_log: true`, since they handle the payload. When either fails, the next task sets `raw_node_failure_reason` from safe fields only (the step, the exit code and the log path, never the output) and fails with it, so the controller's failure record can say what happened. The run log keeps the payload's output, which the payload's own output rules keep free of contract values and the token.
+
+## What the run did: raw_node_transport_state
+
+Every transport sets `raw_node_transport_state`, so the controller's `handle_failure.yml` can decide what to do after a failed build without reading Incus names:
+
+| Value | Set | Controller's action on failure |
+| :-- | :-- | :-- |
+| `none` | First task of `main.yml`, before any check that can fail | `aborted`: nothing was created, no teardown |
+| `adopted` | Once an existing instance is accepted (`raw_node_incus_allow_existing=true`), before anything in it changes | `quarantined`: the controller never deletes what it did not create |
+| `created` | Just before the `incus launch` command, so a launch that fails halfway still counts | Destroy through `tasks/destroy.yml` if `can_destroy`, else quarantine |
+
+If the build fails before the transport runs (for example in `payload.yml`), the fact is undefined, which the controller treats as `none`.
 
 ## The ownership marker
 
@@ -45,7 +57,7 @@ Teardown outcomes:
 | No instance with that name | Nothing to delete, succeeds | Nothing to delete, succeeds |
 | Instance launched by this run, marker present | Deleted | Not applicable |
 | Instance carries the marker, launched earlier | Left alone, succeeds | Deleted |
-| Instance adopted by this run | Refused, fails (controller quarantines) | Deleted only if it carries the marker |
+| Instance adopted by this run | Not called: the controller quarantines from `raw_node_transport_state`; if called, refused | Deleted only if it carries the marker |
 | Instance without the marker | Left alone, succeeds | Refused, fails |
 
 ## Inputs
@@ -61,7 +73,8 @@ Teardown outcomes:
 | `raw_node_incus_profiles` | `[default]` | Profiles applied at launch |
 | `raw_node_incus_create` | `true` | Create the instance if it is missing |
 | `raw_node_incus_wait_timeout` | `120` | Seconds `main.yml` waits for a running instance with a global address |
-| `raw_node_incus_address_timeout` | `raw_node_report_timeout`, else `raw_node_incus_wait_timeout` | Seconds `address.yml` waits when called by the controller |
+| `raw_node_transport_address_timeout` | Passed by the caller | Seconds `address.yml` waits; the generic parameter every transport's `address.yml` takes. The controller's `wait_phone_home.yml` passes its `raw_node_report_timeout`, and `main.yml` passes `raw_node_incus_wait_timeout` |
+| `raw_node_incus_address_timeout` | `{{ raw_node_incus_wait_timeout }}` | Fallback for `address.yml` when the caller passes no timeout; never reads a controller variable |
 | `raw_node_payload_file` | `{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}/raw-node-firstboot` | Payload rendered by `payload.yml` |
 | `raw_node_incus_run_log` | `{{ raw_node_logs_dir }}/{{ raw_node_hostname }}/incus_exec-run.log` | Run log |
 | `raw_node_incus_payload_dest` | `/root/raw-node-firstboot` | Absolute path for the payload inside the instance |
@@ -81,10 +94,11 @@ The other settings stay in `defaults/main.yml` because an operator or the contro
 
 | Variable | Set by | Meaning |
 | :-- | :-- | :-- |
+| `raw_node_transport_state` | `main.yml` | What this run did to the platform: `none`, `adopted` or `created` (see below) |
 | `raw_node_transport_result` | `main.yml` | Instance, project, `created`, `payload_rc`, `ipv4`, `ipv6`, `log` |
 | `raw_node_transport_address` | `address.yml` | `found`, `ipv4`, `ipv6`, `ssh_host_keys`, `waited` |
 | `raw_node_failure_reason` | `main.yml`, on a failed push or payload run | Secret-free reason for the failure record |
-| `raw_node_incus_launched`, `raw_node_incus_adopted` | `main.yml` | Whether this run launched or adopted the instance; read by `destroy.yml` |
+| `raw_node_incus_launched`, `raw_node_incus_adopted` | `main.yml` | Whether this run launched or adopted the instance; read by this role's `destroy.yml`, set in the same tasks as `raw_node_transport_state` |
 
 ## Testing
 

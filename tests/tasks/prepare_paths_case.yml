@@ -62,7 +62,8 @@
       - raw_node_test_outcome == 'continue' or not raw_node_test_written.results[1].stat.exists
       # A case that continues writes the attempt record, in_progress, with no credentials.
       - raw_node_test_outcome == 'stop' or raw_node_test_attempt.state == 'in_progress'
-      - raw_node_test_outcome == 'stop' or raw_node_test_attempt.keys() | sort == ['hostname', 'started', 'state', 'strategy', 'target_platform', 'transport', 'updated']
+      - raw_node_test_outcome == 'stop'
+        or raw_node_test_attempt.keys() | sort == ['hostname', 'started', 'state', 'strategy', 'target_platform', 'transport', 'updated']
       # ... and creates the secrets directories with mode 0700.
       - raw_node_test_outcome == 'stop' or raw_node_test_secrets_stats.results | map(attribute='stat.mode') | unique | list == ['0700']
     fail_msg: >-

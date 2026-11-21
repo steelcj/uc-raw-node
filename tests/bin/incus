@@ -18,6 +18,9 @@
 #     it ran in the instance's files; the payload's staging copy is the
 #     controller file itself.
 #   - exec of the SSH host key command prints one stand-in host key.
+#   - when the file $FAKE_INCUS_STATE.drop-address exists, an instance
+#     whose payload has run reports no global address, to test the
+#     controller's no_report path.
 import json
 import os
 import subprocess
@@ -49,15 +52,17 @@ def save():
 
 
 def inst(n):
+    eth0 = [{"family": "inet", "address": "10.10.10.5", "scope": "global"},
+            {"family": "inet6", "address": "fd42::5", "scope": "global"}]
+    if state[n].get("ran") and os.path.exists(state_file + ".drop-address"):
+        eth0 = [{"family": "inet6", "address": "fe80::5", "scope": "link"}]
     return {
         "name": n,
         "status": "Running",
         "config": state[n].get("config", {}),
         "state": {"network": {
             "lo": {"addresses": [{"family": "inet", "address": "127.0.0.1", "scope": "local"}]},
-            "eth0": {"addresses": [
-                {"family": "inet", "address": "10.10.10.5", "scope": "global"},
-                {"family": "inet6", "address": "fd42::5", "scope": "global"}]}}},
+            "eth0": {"addresses": eth0}}},
     }
 
 
@@ -100,6 +105,8 @@ elif cmd == "exec":
     src = state[n]["files"].get(rest[0])
     if not src:
         fail("not found", 127)
+    state[n]["ran"] = True
+    save()
     sys.exit(subprocess.call(["sh", src]))
 elif cmd == "delete":
     name = args[-1]

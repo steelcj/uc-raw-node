@@ -18,8 +18,10 @@ The controller pipeline is in place: `build.yml` runs end to end, with the attem
 | Output paths, secrets checks (`prepare_paths.yml`) and attempt record | Done, tested |
 | `raw_node_transport_incus_exec`, with ownership marker, `address.yml` and `destroy.yml` | Done, tested with a stand-in Incus client and on a real Incus host (Debian 13 container) |
 | Address report (`wait_phone_home.yml`, transport source) | Done, tested |
-| Confirmation and failure handling | Done, tested with a stand-in Incus client and on a real Incus host |
+| Confirmation and failure handling, including the `aborted` state from the generic `raw_node_transport_state` | Done, tested with a stand-in Incus client and on a real Incus host |
+| Attempt history and the refusal to start while a node may exist (`write_attempt.yml`) | Done, tested with a stand-in Incus client and on a real Incus host |
 | Standalone teardown (`destroy.yml`) | Done, tested with a stand-in Incus client and on a real Incus host |
+| Variable and secret-handling check, `tools/check.sh` and git hooks | Done |
 | `payload.yml` (renders `raw-node-firstboot`) | Placeholder: fails "not implemented yet" |
 | `raw_node_validator` | Placeholder: fails "not implemented yet" |
 | Phone-home receiver | Not started |
@@ -159,6 +161,28 @@ ansible-playbook -i localhost, -c local tests/build_scenarios.yml -e raw_node_te
 ansible-playbook -i localhost, -c local tests/destroy_scenarios.yml -e raw_node_test_stand_in=false -e raw_node_incus_project=uc-raw-node-test
 ```
 
+### Checks and git hooks
+
+`tools/check.sh` is the one command for "is the repository healthy". It runs, in order, the variable and secret-handling check (`tools/check_variables.py`), `ansible-playbook --syntax-check` on every playbook, `ansible-lint` if it is installed, and the stand-in test suite above. `tools/check.sh --fast` runs only the variable check, the syntax checks and the gating lint (over the entry playbooks and `tasks/`), in seconds. The full check also lints the whole repository (reported, not gating) and runs the stand-in test suite, and takes about 6 minutes. It needs `ansible-playbook` on the PATH, or `ANSIBLE_PLAYBOOK` set to it, and writes its logs to `artifacts/check/`. If `ansible-playbook` is not on the PATH, for example because Ansible lives in a virtual environment that is not active, or because a git hook runs it from a GUI client, `tools/check.sh` sources `tools/check.env` when that file exists. It is a plain `sh` file for this host, ignored by git, that puts Ansible on the PATH:
+
+```sh
+PATH="$HOME/.venvs/ansible/bin:$PATH"
+```
+
+`tools/check.sh` does not guess where Ansible is. If it still cannot find `ansible-playbook`, it stops and says to create that file.
+
+`tools/check_variables.py` enforces the naming table in the layout design (every name set by `set_fact` or `register` matches a row and is set only in a file that row lists) and the secret-handling rules (`no_log: true` on any task that refers to or sets the secrets path, the payload, the contract input or a token, and no `set -x` in `templates/`). A task the rule is wrong for carries a `# ci-allow: <rule> <reason>` comment on the line above it, and the check lists every allowance it honours.
+
+The repository carries two git hooks in `tools/git-hooks/`, `pre-commit` and `pre-push`. Both run the fast checks, `tools/check.sh --fast`. They are plain `sh` scripts that need nothing beyond git. Enable them once per clone:
+
+```sh
+tools/install-hooks.sh
+```
+
+This sets git's `core.hooksPath` to `tools/git-hooks`, so it works the same with any remote or none. It also checks that `ansible-playbook` can be found the way `tools/check.sh` finds it, and if not, says to create `tools/check.env`. The hooks are a local convenience, not a gate: `git commit --no-verify` and `git push --no-verify` skip them.
+
+The rule before merging to `main` is the full check, run by hand: `tools/check.sh`, which includes the stand-in test suite, and the real-host runs under Tests where an Incus host is available. The full check is not in the `pre-push` hook. It takes about 6 minutes, which is longer than GitHub keeps an SSH connection open while a `pre-push` hook runs: git opens the connection before the hook starts, GitHub closes it while the hook is still running, and the push fails even though the check passed.
+
 ## Output and secrets
 
 | Path | Setting | Holds |
@@ -170,9 +194,26 @@ ansible-playbook -i localhost, -c local tests/destroy_scenarios.yml -e raw_node_
 
 Each setting can be overridden with `-e`. Records and reports hold public data only. Logs hold the transport's and the payload's output, which the payload's output rules keep free of contract values.
 
+### Attempt states
+
+`records/<hostname>/attempt.yml` holds the current attempt's `state`:
+
+| State | Meaning |
+| :-- | :-- |
+| `in_progress` | The build has started |
+| `confirmed` | The node passed validation and `confirmation.yml` is written |
+| `failed` | Failure handling has started; a record left in this state means it did not finish |
+| `aborted` | The build failed before the transport created anything, so there was nothing to tear down and no alert |
+| `destroyed` | A node existed and was torn down, by failure handling or `destroy.yml` |
+| `quarantined` | A node exists in an unknown state and was left for the operator, with an alert: the teardown failed, the platform cannot destroy, or the run adopted an existing instance |
+
+Failure handling chooses between `aborted`, `quarantined` and `destroyed` from `raw_node_transport_state`, which every transport sets: `none` (nothing created), `adopted` (an existing instance was used) or `created`. A node may still exist in `confirmed`, `quarantined`, `in_progress` and `failed`, so a new build for that hostname refuses to start in those states (see below).
+
 ### Operational notes
 
 - **Records are operational state.** `destroy.yml` reads a node's platform from `records/<hostname>/attempt.yml`, and the orchestration controller reads `confirmation.yml`. Deleting a node's records breaks `destroy.yml` for that node until `-e target_platform` is supplied, and removes the hand-off for a confirmed node. `records/` is ignored by git, so records exist only on the controller host that built the node.
+- **A confirmation counts only while its attempt is confirmed.** Records are kept when a node is destroyed, so `confirmation.yml` outlives the node it describes. The orchestration controller reads `records/<hostname>/attempt.yml` first and accepts `confirmation.yml` only when its `state` is `confirmed`.
+- **Earlier attempts move into history.** Each hostname has one current attempt. When a new build starts for a hostname that already has records, the earlier `attempt.yml`, `failure.yml` and `confirmation.yml` move into `records/<hostname>/history/<YYYY-MM-DD--HH-MM-SS>/`, named after the earlier attempt's start time (UTC), with `-2`, `-3` added if the name is taken. The build refuses to start if the current attempt is `confirmed`, `quarantined`, `in_progress` or `failed`, since a node may still exist: destroy it first, or pass `-e raw_node_attempt_replace=true` if you know it is gone.
 - **The secrets path** is `~/.secrets/uc-raw-node` by default, outside the repository. The controller creates its missing directories with mode 0700, writes files with mode 0600, and stops if the secrets path or a node's directory already exists with looser permissions, or if the path is inside the repository and not ignored by git. Existing parents such as `~/.secrets` are left as they are.
 - **Backups and cloud sync.** The secrets path and, with a home directory checkout, `records/` sit under the controller host's home directory by default, so any backup or cloud sync of that directory copies them to other devices. The controller cannot prevent that. The payload and token are deleted after use, which limits what a backup can catch, but does not make the secrets path safe to sync.
 - **A second controller host** starts with an empty secrets path, which is harmless because tokens are single-use, and with no records either. On that host, `destroy.yml` needs `-e target_platform`, and the transport's ownership marker, which lives on the platform, still decides what may be deleted. A shared records location is deferred until several hosts must manage the same nodes.

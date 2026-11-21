@@ -2,7 +2,7 @@
 #
 # One scenario of tests/build_scenarios.yml.
 
-- name: "Start {{ raw_node_test_scenario }} from empty output directories"
+- name: "Start from empty output directories: {{ raw_node_test_scenario }}"
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
@@ -12,12 +12,22 @@
     - "{{ raw_node_test_logs }}"
     - "{{ raw_node_test_secrets }}"
 
+- name: "Launch an unmarked instance under the hostname for {{ raw_node_test_scenario }}"
+  ansible.builtin.command:
+    argv: [incus, launch, "{{ raw_node_test_image }}", "{{ raw_node_test_hostname }}", "--project={{ raw_node_test_project }}"]
+  environment:
+    PATH: "{{ raw_node_test_path }}"
+  changed_when: true
+  when: raw_node_test_scenario in ['refused_existing', 'adopted_failure']
+
 - name: "Run tests/build.yml for {{ raw_node_test_scenario }}"
   ansible.builtin.command:
     argv: >-
       {{ ['ansible-playbook', '-i', 'localhost,', '-c', 'local',
           playbook_dir ~ '/build.yml', '-e', 'raw_node_test_scenario=' ~ raw_node_test_scenario]
-         + raw_node_test_extra_args }}
+         + raw_node_test_extra_args
+         + (['-e', 'raw_node_incus_allow_existing=true'] if raw_node_test_scenario == 'adopted_failure' else [])
+         + (['-e', 'raw_node_report_timeout=7'] if raw_node_test_scenario == 'no_report' else []) }}
     chdir: "{{ playbook_dir }}/.."
   environment:
     PATH: "{{ raw_node_test_path }}"
@@ -30,7 +40,9 @@
   ansible.builtin.set_fact:
     raw_node_test_attempt: "{{ lookup('ansible.builtin.file', raw_node_test_records ~ '/attempt.yml', errors='ignore') | default('', true) | from_yaml }}"
     raw_node_test_failure: "{{ lookup('ansible.builtin.file', raw_node_test_records ~ '/failure.yml', errors='ignore') | default('', true) | from_yaml }}"
-    raw_node_test_confirmation: "{{ lookup('ansible.builtin.file', raw_node_test_records ~ '/confirmation.yml', errors='ignore') | default('', true) | from_yaml }}"
+    raw_node_test_confirmation: >-
+      {{ lookup('ansible.builtin.file', raw_node_test_records ~ '/confirmation.yml', errors='ignore')
+         | default('', true) | from_yaml }}
     raw_node_test_report: "{{ lookup('ansible.builtin.file', raw_node_test_reports ~ '/report.yml', errors='ignore') | default('', true) | from_yaml }}"
     raw_node_test_runlog: "{{ lookup('ansible.builtin.file', raw_node_test_logs ~ '/incus_exec-run.log', errors='ignore') | default('', true) }}"
     raw_node_test_console: "{{ raw_node_test_run.stdout ~ raw_node_test_run.stderr }}"
@@ -63,11 +75,16 @@
   changed_when: false
   failed_when: raw_node_test_grep.rc not in [0, 1]
 
-- name: Check whether the test instance exists
+- name: Check whether the test instance exists and carries the ownership marker
   ansible.builtin.set_fact:
     raw_node_test_exists: >-
       {{ raw_node_test_instances.stdout | from_json
          | selectattr('name', 'equalto', raw_node_test_hostname) | list | length > 0 }}
+    raw_node_test_marker: >-
+      {{ (raw_node_test_instances.stdout | from_json
+          | selectattr('name', 'equalto', raw_node_test_hostname)
+          | map(attribute='config') | map('default', {}) | first | default({}))
+         .get('user.uc-raw-node.created', '') }}
 
 - name: Clean up the instance the scenario left
   when: raw_node_test_exists | bool
@@ -77,11 +94,12 @@
         path: "{{ playbook_dir }}/../artifacts/fake-incus.json.fail-delete"
         state: absent
 
-    - name: Delete the test instance
+    - name: Delete the test instance by hand
       ansible.builtin.command:
         argv: [incus, delete, --force, "--project={{ raw_node_test_project }}", "{{ raw_node_test_hostname }}"]
       environment:
         PATH: "{{ raw_node_test_path }}"
+        FAKE_INCUS_ALLOW_UNMARKED_DELETE: "1"
       changed_when: true
 
 - name: "Check the common results of {{ raw_node_test_scenario }}"
@@ -124,6 +142,7 @@
       - "'STAND-IN' not in (raw_node_test_failure | to_json)"
       - raw_node_test_failure.action == 'destroy'
       - raw_node_test_failure.teardown_error is not defined
+      - raw_node_test_console is not search('ALERT')
       - raw_node_test_confirmation == none
       - "'STAND-IN-PAYLOAD-OUTPUT' in raw_node_test_runlog"
       - raw_node_test_console is search('Build of ' ~ raw_node_test_hostname ~ ' failed at .Fail on payload.')
@@ -151,14 +170,73 @@
   ansible.builtin.assert:
     that:
       - raw_node_test_run.rc != 0
-      - raw_node_test_attempt.state == 'destroyed'
+      - raw_node_test_attempt.state == 'aborted'
+      - raw_node_test_failure.action == 'abort'
       - raw_node_test_failure.failed_task == 'Stop, payload rendering is not implemented yet'
       - "'not implemented yet' in raw_node_test_failure.reason"
       - raw_node_test_console is search('not implemented yet')
+      - raw_node_test_console is search('Attempt state. aborted')
+      - raw_node_test_console is not search('ALERT')
       - not (raw_node_test_exists | bool)
     fail_msg: "placeholders: {{ raw_node_test_failure }} {{ raw_node_test_console[-1500:] }}"
     quiet: true
   when: raw_node_test_scenario == 'placeholders'
+
+- name: Check the refused existing instance scenario
+  ansible.builtin.assert:
+    that:
+      - raw_node_test_run.rc != 0
+      - raw_node_test_attempt.state == 'aborted'
+      - raw_node_test_failure.action == 'abort'
+      - raw_node_test_failure.failed_task == 'Refuse to adopt an instance that already exists'
+      - "'already exists' in raw_node_test_failure.reason"
+      - raw_node_test_console is not search('ALERT')
+      - raw_node_test_exists | bool
+      - raw_node_test_marker == ''
+    fail_msg: "refused_existing: {{ raw_node_test_failure }} {{ raw_node_test_console[-1500:] }}"
+    quiet: true
+  when: raw_node_test_scenario == 'refused_existing'
+
+- name: Check the adopted instance failure scenario
+  ansible.builtin.assert:
+    that:
+      - raw_node_test_run.rc != 0
+      - raw_node_test_attempt.state == 'quarantined'
+      - raw_node_test_failure.action == 'quarantine'
+      - raw_node_test_failure.failed_task == 'Fail on payload'
+      - "'exited with 3' in raw_node_test_failure.reason"
+      - raw_node_test_failure.teardown_error is not defined
+      - raw_node_test_console is search('ALERT. ' ~ raw_node_test_hostname ~ ' is quarantined. the build used an instance that existed before it')
+      - raw_node_test_exists | bool
+      - raw_node_test_marker == ''
+    fail_msg: "adopted_failure: {{ raw_node_test_failure }} {{ raw_node_test_console[-1500:] }}"
+    quiet: true
+  when: raw_node_test_scenario == 'adopted_failure'
+
+- name: Check the no report scenario
+  ansible.builtin.assert:
+    that:
+      - raw_node_test_run.rc != 0
+      - raw_node_test_attempt.state == 'destroyed'
+      - raw_node_test_failure.failed_task == 'Fail on missing report'
+      - raw_node_test_failure.reason == 'no_report'
+      - "'within 7 seconds' in raw_node_test_failure.detail"
+      - raw_node_test_failure.clause is search('none checked')
+      - raw_node_test_failure.action == 'destroy'
+      - raw_node_test_report == none
+      - not (raw_node_test_exists | bool)
+      # The whole run is bounded by the 7 seconds passed to the transport:
+      # with the transport's own 120 second fallback, or the controller's
+      # 600, it could not finish in under a minute.
+      - raw_node_test_run_seconds | float < 60
+    fail_msg: "no_report: run took {{ raw_node_test_run_seconds }} s. {{ raw_node_test_failure }} {{ raw_node_test_console[-1500:] }}"
+    quiet: true
+  vars:
+    raw_node_test_run_seconds: >-
+      {{ (raw_node_test_run.delta.split(':')[0] | int) * 3600
+         + (raw_node_test_run.delta.split(':')[1] | int) * 60
+         + (raw_node_test_run.delta.split(':')[2] | float) }}
+  when: raw_node_test_scenario == 'no_report'
 
 - name: Collect the scenario result
   ansible.builtin.set_fact:

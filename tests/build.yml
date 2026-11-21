@@ -13,6 +13,15 @@
 #   teardown_failure  as payload_failure, and the stand-in Incus client
 #                     fails on delete: quarantined (stand-in client only)
 #   placeholders      no overrides: payload.yml fails "not implemented yet"
+#   refused_existing  as success; the runner first launches an unmarked
+#                     instance under the hostname, which the transport refuses
+#   adopted_failure   failing stand-in payload; the runner first launches an
+#                     unmarked instance and passes
+#                     -e raw_node_incus_allow_existing=true
+#   no_report         as success, but the stand-in Incus client drops the
+#                     instance's address once the payload has run, so the
+#                     report times out (stand-in client only; the runner
+#                     passes -e raw_node_report_timeout=7)
 #
 #   PATH="$PWD/tests/bin:$PATH" ansible-playbook -i localhost, -c local \
 #     tests/build.yml -e raw_node_test_scenario=success
@@ -34,13 +43,18 @@
       success: "{{ playbook_dir }}/fixtures/raw-node-firstboot"
       payload_failure: "{{ playbook_dir }}/fixtures/raw-node-firstboot-fail"
       teardown_failure: "{{ playbook_dir }}/fixtures/raw-node-firstboot-fail"
-    raw_node_test_fail_delete_flag: "{{ lookup('ansible.builtin.env', 'FAKE_INCUS_STATE') | default(playbook_dir ~ '/../artifacts/fake-incus.json', true) }}.fail-delete"
+      refused_existing: "{{ playbook_dir }}/fixtures/raw-node-firstboot"
+      adopted_failure: "{{ playbook_dir }}/fixtures/raw-node-firstboot-fail"
+      no_report: "{{ playbook_dir }}/fixtures/raw-node-firstboot"
+    raw_node_test_fake_state: "{{ lookup('ansible.builtin.env', 'FAKE_INCUS_STATE') | default(playbook_dir ~ '/../artifacts/fake-incus.json', true) }}"
+    raw_node_test_fail_delete_flag: "{{ raw_node_test_fake_state }}.fail-delete"
+    raw_node_test_drop_address_flag: "{{ raw_node_test_fake_state }}.drop-address"
 
   tasks:
     - name: Check the scenario
       ansible.builtin.assert:
         that:
-          - raw_node_test_scenario in ['success', 'payload_failure', 'teardown_failure', 'placeholders']
+          - raw_node_test_scenario in ['success', 'payload_failure', 'teardown_failure', 'placeholders', 'refused_existing', 'adopted_failure', 'no_report']
         fail_msg: "Unknown raw_node_test_scenario '{{ raw_node_test_scenario }}'."
         quiet: true
 
@@ -67,6 +81,19 @@
         content: "1\n"
         mode: "0600"
       when: raw_node_test_scenario == 'teardown_failure'
+
+    - name: Make the stand-in Incus client drop the address after the payload
+      ansible.builtin.copy:
+        dest: "{{ raw_node_test_drop_address_flag }}"
+        content: "1\n"
+        mode: "0600"
+      when: raw_node_test_scenario == 'no_report'
+
+    - name: Let the stand-in Incus client report addresses again
+      ansible.builtin.file:
+        path: "{{ raw_node_test_drop_address_flag }}"
+        state: absent
+      when: raw_node_test_scenario != 'no_report'
 
     - name: Let the stand-in Incus client delete again
       ansible.builtin.file:

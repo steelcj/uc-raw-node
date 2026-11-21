@@ -9,13 +9,22 @@
 #      copied whole: the reason is raw_node_failure_reason when a step set
 #      it (a no_log task's result is masked), and otherwise the module's
 #      message and return code.
-#   2. Destroy or quarantine. If can_destroy is true, the transport's
-#      tasks/destroy.yml runs in its own block; success sets the state to
-#      destroyed, failure adds the teardown error to the record and sets the
-#      state to quarantined. The teardown error keeps the platform's own
-#      error text (standard error, trimmed): teardown commands carry no
-#      payload or contract values. If can_destroy is false, the state is set to
-#      quarantined and an alert is shown.
+#   2. Abort, quarantine or destroy, chosen from raw_node_transport_state,
+#      the one generic fact every transport sets (undefined when the build
+#      failed before the transport ran, which counts as none):
+#        none     the transport created nothing: state aborted, no teardown,
+#                 no alert.
+#        adopted  the transport used an instance that existed before: state
+#                 quarantined with an alert, no teardown, since the
+#                 controller never deletes what it did not create.
+#        created  if can_destroy is true, the transport's tasks/destroy.yml
+#                 runs in its own block; success sets the state to
+#                 destroyed, failure adds the teardown error to the record
+#                 and sets the state to quarantined. The teardown error keeps
+#                 the platform's own error text (standard error, trimmed):
+#                 teardown commands carry no payload or contract values. If
+#                 can_destroy is false, the state is set to quarantined and
+#                 an alert is shown.
 #   3. Delete the node's secrets, whatever happened in step 2.
 #   4. Fail with the original failure, pointing to the record.
 
@@ -29,9 +38,17 @@
          else ((ansible_failed_result.msg | default('no message') | string | truncate(500))
                ~ ((' (return code ' ~ ansible_failed_result.rc ~ ')')
                   if ansible_failed_result.rc is defined else '')) }}
-    raw_node_failure_action: "{{ 'destroy' if (raw_node_platform.can_destroy | bool) else 'quarantine' }}"
+    raw_node_failure_transport_state: "{{ raw_node_transport_state | default('none') }}"
     raw_node_failure_file: "{{ raw_node_records_dir }}/{{ raw_node_hostname }}/failure.yml"
     raw_node_failure_time: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Choose the action
+  ansible.builtin.set_fact:
+    raw_node_failure_action: >-
+      {{ 'abort' if raw_node_failure_transport_state == 'none'
+         else 'quarantine' if raw_node_failure_transport_state == 'adopted'
+         else 'destroy' if (raw_node_platform.can_destroy | bool)
+         else 'quarantine' }}
 
 - name: Build the failure record
   ansible.builtin.set_fact:
@@ -66,8 +83,14 @@
   vars:
     raw_node_attempt_new_state: failed
 
+- name: Set attempt state to aborted, nothing was created
+  ansible.builtin.include_tasks: set_attempt_state.yml
+  vars:
+    raw_node_attempt_new_state: aborted
+  when: raw_node_failure_action == 'abort'
+
 - name: Destroy the node
-  when: raw_node_platform.can_destroy | bool
+  when: raw_node_failure_action == 'destroy'
   block:
     - name: Tear down through the transport
       ansible.builtin.include_role:
@@ -109,7 +132,7 @@
           {{ raw_node_failure_file }}.
 
 - name: Quarantine the node
-  when: not (raw_node_platform.can_destroy | bool)
+  when: raw_node_failure_action == 'quarantine'
   block:
     - name: Set attempt state to quarantined
       ansible.builtin.include_tasks: set_attempt_state.yml
@@ -119,9 +142,11 @@
     - name: Alert that the node is quarantined
       ansible.builtin.debug:
         msg: >-
-          ALERT: {{ target_platform }} cannot be destroyed by the controller,
-          so {{ raw_node_hostname }} is quarantined. Handle it manually. See
-          {{ raw_node_failure_file }}.
+          ALERT: {{ raw_node_hostname }} is quarantined:
+          {{ 'the build used an instance that existed before it, which the controller never deletes'
+             if raw_node_failure_transport_state == 'adopted'
+             else target_platform ~ ' cannot be destroyed by the controller' }}.
+          Handle it manually. See {{ raw_node_failure_file }}.
 
 - name: Delete the node's secrets
   ansible.builtin.file:

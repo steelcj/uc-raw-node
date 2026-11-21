@@ -40,6 +40,16 @@
     raw_node_test_records: "{{ raw_node_records_path }}/{{ raw_node_test_hostname }}"
 
   tasks:
+    - name: Stop if a real-host run has no dedicated project
+      ansible.builtin.assert:
+        that:
+          - raw_node_test_stand_in | bool or (raw_node_test_project != 'default')
+        fail_msg: >-
+          Against real Incus, pass a dedicated project with
+          -e raw_node_incus_project=<project>, for example uc-raw-node-test,
+          so the test never launches or deletes in the default project.
+        quiet: true
+
     - name: Start the stand-in client from an empty state
       ansible.builtin.file:
         path: "{{ playbook_dir }}/../artifacts/{{ item }}"
@@ -47,6 +57,7 @@
       loop:
         - fake-incus.json
         - fake-incus.json.fail-delete
+        - fake-incus.json.drop-address
       when: raw_node_test_stand_in | bool
 
     - name: Start from empty records

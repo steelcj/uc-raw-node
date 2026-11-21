@@ -4,7 +4,10 @@
 #
 # First release: the transport source only. If the registry entry has
 # reports_address: true and the transport role has tasks/address.yml, the
-# address comes from the transport, bounded by raw_node_report_timeout.
+# address comes from the transport, bounded by raw_node_report_timeout,
+# which is passed to the transport as the generic include parameter
+# raw_node_transport_address_timeout, so no transport reads a controller
+# variable.
 # Otherwise the step fails: the phone-home receiver is not implemented yet.
 #
 # On success writes reports/<hostname>/report.yml (addresses, SSH host
@@ -40,6 +43,8 @@
   ansible.builtin.include_role:
     name: "raw_node_transport_{{ raw_node_platform.transport }}"
     tasks_from: address
+  vars:
+    raw_node_transport_address_timeout: "{{ raw_node_report_timeout }}"
 
 - name: Fail if no address was reported in time
   when: not (raw_node_transport_address.found | default(false) | bool)

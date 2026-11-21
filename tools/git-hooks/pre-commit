@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs the fast checks (variable check, syntax checks, gating lint) before a commit.
+# Enabled per clone by tools/install-hooks.sh. Skipped by git commit
+# --no-verify: tools/check.sh is the authority, not this hook.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec tools/check.sh --fast

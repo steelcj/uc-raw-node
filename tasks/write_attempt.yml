@@ -5,13 +5,113 @@
 # resolved platform and the hostname only, never from the rest of the
 # contract input, so it holds no credentials.
 #
-# Sets raw_node_attempt_file, raw_node_attempt_started and
-# raw_node_attempt_state. Later steps change the state with
+# One attempt per hostname: if the hostname already has an attempt record,
+# the earlier attempt's attempt.yml, failure.yml and confirmation.yml are
+# moved into records/<hostname>/history/<stamp>/ first. Reports stay where
+# they are and are overwritten.
+#
+# A node may still exist when the current attempt is confirmed,
+# quarantined, in_progress or failed (or in a state this file does not
+# know). Then this step refuses to start, before moving anything, unless
+# the operator passes -e raw_node_attempt_replace=true. It starts without
+# asking when the current state is aborted or destroyed, or there is no
+# record.
+#
+# History folder name: the earlier attempt's started time, else its
+# updated time, else the time of the move, in the file-safe form
+# YYYY-MM-DD--HH-MM-SS (UTC, as the records hold it), with -2, -3 and so on
+# added if that folder already exists.
+#
+# Order of the move, so a run that dies partway never leaves the current
+# folder without an attempt.yml while history holds one: copy the files into
+# the history folder, then overwrite attempt.yml with the new record, then
+# remove the earlier failure.yml and confirmation.yml. A confirmation left
+# beside the new record by a run that dies in between is not trusted, since
+# a confirmation is valid only while attempt.yml says confirmed.
+#
+# Sets raw_node_attempt_file, raw_node_attempt_started,
+# raw_node_attempt_state and, when it moved anything,
+# raw_node_attempt_history_dir. Later steps change the state with
 # set_attempt_state.yml.
 
-- name: Set attempt record location and start time
+- name: Set attempt record location
   ansible.builtin.set_fact:
+    raw_node_attempt_dir: "{{ raw_node_records_dir }}/{{ raw_node_hostname }}"
     raw_node_attempt_file: "{{ raw_node_records_dir }}/{{ raw_node_hostname }}/attempt.yml"
+
+- name: Look for the current attempt's records
+  ansible.builtin.stat:
+    path: "{{ raw_node_attempt_dir }}/{{ item }}"
+  loop:
+    - attempt.yml
+    - failure.yml
+    - confirmation.yml
+  register: raw_node_attempt_current_stats
+
+- name: Read the current attempt record
+  ansible.builtin.set_fact:
+    raw_node_attempt_previous: >-
+      {{ (lookup('ansible.builtin.file', raw_node_attempt_file) | from_yaml)
+         if raw_node_attempt_current_stats.results[0].stat.exists else {} }}
+
+- name: Refuse to start while a node may still exist
+  ansible.builtin.assert:
+    that:
+      - raw_node_attempt_previous | length == 0
+        or (raw_node_attempt_previous.state | default('')) in ['aborted', 'destroyed']
+        or (raw_node_attempt_replace | default(false) | bool)
+    fail_msg: >-
+      The current attempt for {{ raw_node_hostname }} is
+      '{{ raw_node_attempt_previous.state | default('unknown') }}', so a node
+      may still exist. Destroy it first (ansible-playbook destroy.yml
+      -e hostname={{ raw_node_hostname }}), or, if you know it is gone, pass
+      -e raw_node_attempt_replace=true to move its records into history and
+      start a new attempt. Nothing was moved.
+    quiet: true
+
+- name: Move the earlier attempt's records into history
+  when: raw_node_attempt_previous | length > 0
+  block:
+    - name: List earlier history folders
+      ansible.builtin.find:
+        paths: "{{ raw_node_attempt_dir }}/history"
+        file_type: directory
+      register: raw_node_attempt_history_found
+
+    - name: Name the history folder
+      ansible.builtin.set_fact:
+        raw_node_attempt_history_dir: >-
+          {%- set stamp = (raw_node_attempt_previous.started
+                           | default(raw_node_attempt_previous.updated, true)
+                           | default(now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ'), true)
+                           | string) -%}
+          {%- set base = stamp | regex_replace('^(\\d{4}-\\d{2}-\\d{2})[T ](\\d{2}):(\\d{2}):(\\d{2}).*$', '\\1--\\2-\\3-\\4')
+                                | regex_replace('[^0-9A-Za-z_.-]', '-') -%}
+          {%- set taken = raw_node_attempt_history_found.files | map(attribute='path') | map('basename') | list -%}
+          {%- set n = namespace(name=base, i=1) -%}
+          {%- for _ in range(taken | length + 1) -%}
+          {%- if n.name in taken -%}{%- set n.i = n.i + 1 -%}{%- set n.name = base ~ '-' ~ n.i -%}{%- endif -%}
+          {%- endfor -%}
+          {{ raw_node_attempt_dir }}/history/{{ n.name }}
+
+    - name: Create the history folder
+      ansible.builtin.file:
+        path: "{{ raw_node_attempt_history_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Copy the earlier records into the history folder
+      ansible.builtin.copy:
+        src: "{{ item.stat.path }}"
+        dest: "{{ raw_node_attempt_history_dir }}/{{ item.item }}"
+        remote_src: true
+        mode: preserve
+      loop: "{{ raw_node_attempt_current_stats.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+- name: Set attempt start time and state
+  ansible.builtin.set_fact:
     raw_node_attempt_started: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
     raw_node_attempt_state: in_progress
 
@@ -31,3 +131,12 @@
       started: "{{ raw_node_attempt_started }}"
       updated: "{{ raw_node_attempt_started }}"
       state: "{{ raw_node_attempt_state }}"
+
+- name: Remove the earlier failure and confirmation records
+  ansible.builtin.file:
+    path: "{{ raw_node_attempt_dir }}/{{ item }}"
+    state: absent
+  loop:
+    - failure.yml
+    - confirmation.yml
+  when: raw_node_attempt_previous | length > 0

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Runs the fast checks (variable check, syntax checks, gating lint) before a
+# push, the same as pre-commit. The full tools/check.sh takes about 6
+# minutes, longer than GitHub keeps the SSH connection open while a pre-push
+# hook runs, so it is run by hand before merging to main instead. Enabled
+# per clone by tools/install-hooks.sh. Skipped by git push --no-verify:
+# tools/check.sh is the authority, not this hook.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec tools/check.sh --fast </dev/null

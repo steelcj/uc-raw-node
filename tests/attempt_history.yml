@@ -1,0 +1,378 @@
+---
+# tests/attempt_history.yml
+#
+# Checks how write_attempt.yml starts a new attempt for a hostname that
+# already has records: when it refuses, when it moves the earlier attempt's
+# records into records/<hostname>/history/<stamp>/, and how it names that
+# folder. Each build is its own ansible-playbook run of tests/build.yml.
+# Cases:
+#   - an aborted attempt, then a second build: proceeds, the first attempt's
+#     attempt.yml and failure.yml are in one history folder
+#   - a confirmed attempt, then a second build: refused before anything
+#     moves, records unchanged
+#   - the same with -e raw_node_attempt_replace=true: proceeds, the
+#     confirmed attempt's files are in history
+#   - a record without started, written by a standalone destroy: the
+#     history folder is named from updated
+#   - two moves of attempts that started in the same second: the second
+#     folder gets -2
+#   - a record left in_progress: refused
+# Run from the repository root.
+#
+# With the stand-in Incus client (the default):
+#   ansible-playbook -i localhost, -c local tests/attempt_history.yml
+#
+# Against real Incus, in a dedicated project:
+#   ansible-playbook -i localhost, -c local tests/attempt_history.yml \
+#     -e raw_node_test_stand_in=false -e raw_node_incus_project=uc-raw-node-test
+
+- name: Run the attempt history cases
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/defaults.yml
+    - vars/output.yml
+
+  vars:
+    raw_node_test_stand_in: true
+    raw_node_test_hostname: rn-test-incus-exec
+    raw_node_test_project: "{{ raw_node_incus_project | default('default') }}"
+    raw_node_test_extra_args: >-
+      {{ (['-e', 'raw_node_incus_project=' ~ raw_node_incus_project] if raw_node_incus_project is defined else [])
+         + (['-e', 'raw_node_incus_image=' ~ raw_node_incus_image] if raw_node_incus_image is defined else []) }}
+    raw_node_test_path: >-
+      {{ ((playbook_dir ~ '/bin:') if raw_node_test_stand_in | bool else '')
+         ~ (ansible_playbook_python | dirname) ~ ':' ~ lookup('ansible.builtin.env', 'PATH') }}
+    raw_node_test_records: "{{ raw_node_records_path }}/{{ raw_node_test_hostname }}"
+    raw_node_test_history: "{{ raw_node_records_path }}/{{ raw_node_test_hostname }}/history"
+    # The file-safe form of a record's timestamp, as write_attempt.yml writes it.
+    raw_node_test_stamp_pattern: '^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2}).*$'
+    raw_node_test_stamp_replace: '\1--\2-\3-\4'
+
+  tasks:
+    - name: Stop if a real-host run has no dedicated project
+      ansible.builtin.assert:
+        that:
+          - raw_node_test_stand_in | bool or (raw_node_test_project != 'default')
+        fail_msg: >-
+          Against real Incus, pass a dedicated project with
+          -e raw_node_incus_project=<project>, for example uc-raw-node-test,
+          so the test never launches or deletes in the default project.
+        quiet: true
+
+    - name: Start the stand-in client from an empty state
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../artifacts/{{ item }}"
+        state: absent
+      loop:
+        - fake-incus.json
+        - fake-incus.json.fail-delete
+        - fake-incus.json.drop-address
+      when: raw_node_test_stand_in | bool
+
+    - name: Look for a leftover test instance
+      ansible.builtin.command:
+        argv: [incus, list, "--project={{ raw_node_test_project }}", --format=json]
+      environment:
+        PATH: "{{ raw_node_test_path }}"
+      register: raw_node_test_leftover
+      changed_when: false
+
+    - name: Stop if the test instance already exists
+      ansible.builtin.assert:
+        that:
+          - raw_node_test_leftover.stdout | from_json | selectattr('name', 'equalto', raw_node_test_hostname) | list | length == 0
+        fail_msg: Instance {{ raw_node_test_hostname }} already exists in project {{ raw_node_test_project }}. Destroy it first.
+        quiet: true
+
+    - name: Run the cases
+      block:
+        # Case 1: aborted, then a second build
+
+        - name: Start from empty records
+          ansible.builtin.file:
+            path: "{{ raw_node_test_records }}"
+            state: absent
+
+        - name: Build once, ending aborted
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=placeholders]
+
+        - name: Remember the first attempt
+          ansible.builtin.set_fact:
+            raw_node_test_first: "{{ raw_node_test_attempt }}"
+
+        - name: Build again
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=placeholders]
+
+        - name: List the history after the second build
+          ansible.builtin.find:
+            paths: "{{ raw_node_test_history }}"
+            recurse: true
+          register: raw_node_test_found
+
+        - name: Check the first attempt moved into one history folder
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_first.state == 'aborted'
+              - raw_node_test_attempt.state == 'aborted'
+              - raw_node_test_attempt.started != raw_node_test_first.started or raw_node_test_attempt.updated != raw_node_test_first.updated
+              - raw_node_test_found.files | map(attribute='path') | map('dirname') | unique | list | length == 1
+              - raw_node_test_found.files | map(attribute='path') | map('basename') | sort == ['attempt.yml', 'failure.yml']
+              - (raw_node_test_found.files | first).path | dirname | basename
+                == raw_node_test_first.started | regex_replace(raw_node_test_stamp_pattern, raw_node_test_stamp_replace)
+              - (lookup('ansible.builtin.file', raw_node_test_moved ~ '/attempt.yml') | from_yaml) == raw_node_test_first
+            fail_msg: "Case 1: {{ raw_node_test_found.files | map(attribute='path') | list }} {{ raw_node_test_console[-1000:] }}"
+            quiet: true
+          vars:
+            raw_node_test_moved: "{{ (raw_node_test_found.files | first).path | dirname }}"
+
+        # Case 2: confirmed, then a second build is refused
+
+        - name: Start case 2 from empty records
+          ansible.builtin.file:
+            path: "{{ raw_node_test_records }}"
+            state: absent
+
+        - name: Build a confirmed node
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=success]
+
+        - name: Note the confirmed records
+          ansible.builtin.stat:
+            path: "{{ raw_node_test_records }}/{{ item }}"
+            checksum_algorithm: sha256
+          loop: [attempt.yml, confirmation.yml]
+          register: raw_node_test_before
+
+        - name: Build again over the confirmed node
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=success]
+
+        - name: Look at the records after the refusal
+          ansible.builtin.stat:
+            path: "{{ raw_node_test_records }}/{{ item }}"
+            checksum_algorithm: sha256
+          loop: [attempt.yml, confirmation.yml, history]
+          register: raw_node_test_after
+
+        - name: Check the second build was refused and nothing moved
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_before.results | map(attribute='stat.exists') | list == [true, true]
+              - raw_node_test_run.rc != 0
+              - raw_node_test_console is search("current attempt for " ~ raw_node_test_hostname ~ " is\s+'confirmed'")
+              - raw_node_test_console is search('raw_node_attempt_replace=true')
+              - raw_node_test_after.results[0].stat.checksum == raw_node_test_before.results[0].stat.checksum
+              - raw_node_test_after.results[1].stat.checksum == raw_node_test_before.results[1].stat.checksum
+              - not raw_node_test_after.results[2].stat.exists
+              - raw_node_test_attempt.state == 'confirmed'
+              - raw_node_test_exists | bool
+            fail_msg: "Case 2: {{ raw_node_test_console[-1500:] }}"
+            quiet: true
+
+        # Case 3: the same with raw_node_attempt_replace
+
+        - name: Remember the confirmed attempt
+          ansible.builtin.set_fact:
+            raw_node_test_first: "{{ raw_node_test_attempt }}"
+
+        - name: Remove the confirmed node, as the operator who passes replace knows it is gone
+          ansible.builtin.command:
+            argv: [incus, delete, --force, "--project={{ raw_node_test_project }}", "{{ raw_node_test_hostname }}"]
+          environment:
+            PATH: "{{ raw_node_test_path }}"
+          changed_when: true
+
+        - name: Build again with replace
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=success, -e, raw_node_attempt_replace=true]
+
+        - name: List the history after the replace
+          ansible.builtin.find:
+            paths: "{{ raw_node_test_history }}"
+            recurse: true
+          register: raw_node_test_found
+
+        - name: Check the confirmed attempt moved into history
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_run.rc == 0
+              - raw_node_test_attempt.state == 'confirmed'
+              - raw_node_test_attempt.started != raw_node_test_first.started or raw_node_test_attempt.updated != raw_node_test_first.updated
+              - raw_node_test_found.files | map(attribute='path') | map('basename') | sort == ['attempt.yml', 'confirmation.yml']
+              - (lookup('ansible.builtin.file', ((raw_node_test_found.files | first).path | dirname) ~ '/attempt.yml') | from_yaml).state == 'confirmed'
+            fail_msg: "Case 3: {{ raw_node_test_found.files | map(attribute='path') | list }} {{ raw_node_test_console[-1500:] }}"
+            quiet: true
+
+        - name: Remove the node built with replace
+          ansible.builtin.command:
+            argv: [incus, delete, --force, "--project={{ raw_node_test_project }}", "{{ raw_node_test_hostname }}"]
+          environment:
+            PATH: "{{ raw_node_test_path }}"
+          changed_when: true
+
+        # Case 4: a record without started, from a standalone destroy
+
+        - name: Start case 4 from empty records
+          ansible.builtin.file:
+            path: "{{ raw_node_test_records }}"
+            state: absent
+
+        - name: Destroy with -e target_platform and no record
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: destroy.yml
+            raw_node_test_args: [-e, "hostname={{ raw_node_test_hostname }}", -e, target_platform=incus_container_default]
+
+        - name: Remember the record without a start time
+          ansible.builtin.set_fact:
+            raw_node_test_first: "{{ raw_node_test_attempt }}"
+
+        - name: Build after the standalone destroy
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=placeholders]
+
+        - name: List the history after case 4
+          ansible.builtin.find:
+            paths: "{{ raw_node_test_history }}"
+            file_type: directory
+          register: raw_node_test_found
+
+        - name: Check the history folder is named from updated
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_first.state == 'destroyed'
+              - raw_node_test_first.started is not defined
+              - raw_node_test_found.files | map(attribute='path') | map('basename') | list
+                == [raw_node_test_first.updated | regex_replace(raw_node_test_stamp_pattern, raw_node_test_stamp_replace)]
+            fail_msg: "Case 4: {{ raw_node_test_first }} {{ raw_node_test_found.files | map(attribute='path') | list }}"
+            quiet: true
+
+        # Case 5: two attempts that started in the same second
+
+        - name: Start case 5 from empty records
+          ansible.builtin.file:
+            path: "{{ raw_node_test_records }}"
+            state: absent
+
+        - name: Create the records directory for case 5
+          ansible.builtin.file:
+            path: "{{ raw_node_test_records }}"
+            state: directory
+            mode: "0700"
+
+        - name: Write an aborted record that started at a fixed second
+          ansible.builtin.copy:
+            dest: "{{ raw_node_test_records }}/attempt.yml"
+            content: "{{ raw_node_test_fixed | to_nice_yaml(sort_keys=false) }}"
+            mode: "0644"
+          vars: &raw_node_test_fixed_vars
+            raw_node_test_fixed:
+              hostname: "{{ raw_node_test_hostname }}"
+              target_platform: incus_container_default
+              strategy: adopt
+              transport: incus_exec
+              started: '2026-01-02T03:04:05Z'
+              updated: '2026-01-02T03:04:06Z'
+              state: aborted
+
+        - name: Build over the first fixed record
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=placeholders]
+
+        - name: Write a second aborted record that started in the same second
+          ansible.builtin.copy:
+            dest: "{{ raw_node_test_records }}/attempt.yml"
+            content: "{{ raw_node_test_fixed | to_nice_yaml(sort_keys=false) }}"
+            mode: "0644"
+          vars: *raw_node_test_fixed_vars
+
+        - name: Build over the second fixed record
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=placeholders]
+
+        - name: List the history after case 5
+          ansible.builtin.find:
+            paths: "{{ raw_node_test_history }}"
+            file_type: directory
+          register: raw_node_test_found
+
+        - name: Check the second folder got -2
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_found.files | map(attribute='path') | map('basename') | sort
+                == ['2026-01-02--03-04-05', '2026-01-02--03-04-05-2']
+            fail_msg: "Case 5: {{ raw_node_test_found.files | map(attribute='path') | list }}"
+            quiet: true
+
+        # Case 6: a record left in_progress
+
+        - name: Start case 6 from empty records
+          ansible.builtin.file:
+            path: "{{ raw_node_test_records }}"
+            state: absent
+
+        - name: Create the records directory for case 6
+          ansible.builtin.file:
+            path: "{{ raw_node_test_records }}"
+            state: directory
+            mode: "0700"
+
+        - name: Write a record left in progress
+          ansible.builtin.copy:
+            dest: "{{ raw_node_test_records }}/attempt.yml"
+            content: "{{ raw_node_test_fixed | combine({'state': 'in_progress'}) | to_nice_yaml(sort_keys=false) }}"
+            mode: "0644"
+          vars: *raw_node_test_fixed_vars
+
+        - name: Build over the record left in progress
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=placeholders]
+
+        - name: Look for history after case 6
+          ansible.builtin.stat:
+            path: "{{ raw_node_test_history }}"
+          register: raw_node_test_history_stat
+
+        - name: Check the build was refused
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_run.rc != 0
+              - raw_node_test_console is search("is\s+'in_progress'")
+              - raw_node_test_attempt.state == 'in_progress'
+              - raw_node_test_attempt.started == '2026-01-02T03:04:05Z'
+              - not raw_node_test_history_stat.stat.exists
+            fail_msg: "Case 6: {{ raw_node_test_console[-1500:] }}"
+            quiet: true
+
+      always:
+        - name: Delete any test instance left behind
+          ansible.builtin.command:
+            argv: [incus, delete, --force, "--project={{ raw_node_test_project }}", "{{ raw_node_test_hostname }}"]
+          environment:
+            PATH: "{{ raw_node_test_path }}"
+          register: raw_node_test_cleanup
+          changed_when: raw_node_test_cleanup.rc == 0
+          failed_when: false

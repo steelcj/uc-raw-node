@@ -15,6 +15,7 @@
       {{ dict(raw_node_input_required_fields
               | zip(query('ansible.builtin.vars', *raw_node_input_required_fields, default=''))) }}
   when: raw_node_input_file is not defined
+  no_log: true
 
 - name: Load contract input file
   when: raw_node_input_file is defined
@@ -22,6 +23,7 @@
     - name: Parse input file
       ansible.builtin.set_fact:
         raw_node_input: "{{ lookup('ansible.builtin.file', raw_node_input_file) | from_yaml }}"
+      no_log: true
 
     - name: Check input is a mapping
       ansible.builtin.assert:
@@ -77,10 +79,17 @@
 - name: Check SSH public key
   ansible.builtin.assert:
     that:
-      - raw_node_input.ssh_public_key is match('^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/=]+( .*)?$')
+      - raw_node_input.ssh_public_key is match(raw_node_input_key_pattern)
     fail_msg: "ssh_public_key is not a single OpenSSH public key line."
     quiet: true
+  vars:
+    # Folded: the line break becomes the single space between the key type
+    # and the base64 body.
+    raw_node_input_key_pattern: >-
+      ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)
+      [A-Za-z0-9+/=]+( .*)?$
 
+# ci-allow: no_log reads only the field names of raw_node_input (keys), never their values
 - name: Warn about unknown input fields
   ansible.builtin.debug:
     msg: "Contract input has fields the controller does not use: {{ raw_node_input_unknown | join(', ') }}"

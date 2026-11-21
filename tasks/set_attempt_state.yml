@@ -1,12 +1,12 @@
 # tasks/set_attempt_state.yml
 #
 # Changes the state in records/<hostname>/attempt.yml. Used by
-# write_confirmation.yml (confirmed), handle_failure.yml (failed, destroyed,
-# quarantined) and destroy.yml (destroyed).
+# write_confirmation.yml (confirmed), handle_failure.yml (failed, aborted,
+# destroyed, quarantined) and destroy.yml (destroyed).
 #
 # Parameter, passed with vars on the include:
-#   raw_node_attempt_new_state  in_progress, confirmed, failed, destroyed or
-#                               quarantined
+#   raw_node_attempt_new_state  in_progress, confirmed, failed, aborted,
+#                               destroyed or quarantined
 #
 # Needs raw_node_records_dir, raw_node_hostname, target_platform and
 # raw_node_platform. Reads the record from disk, so it works in a standalone
@@ -18,7 +18,7 @@
 - name: Check the new attempt state
   ansible.builtin.assert:
     that:
-      - raw_node_attempt_new_state in ['in_progress', 'confirmed', 'failed', 'destroyed', 'quarantined']
+      - raw_node_attempt_new_state in ['in_progress', 'confirmed', 'failed', 'aborted', 'destroyed', 'quarantined']
     fail_msg: "Attempt state '{{ raw_node_attempt_new_state }}' is not a known state."
     quiet: true
 
