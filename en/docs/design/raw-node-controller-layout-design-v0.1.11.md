@@ -1,6 +1,6 @@
 # Raw Node Controller Layout Design
 
-- **Version:** 0.1.10
+- **Version:** 0.1.11
 - **Date:** 2026-11-21
 - **License:** Proprietary / Internal Use Only
 - **Author:** Christopher Steel
@@ -9,7 +9,7 @@
 
 This document decides how the uc-raw-node controller is laid out on disk and how its steps call each other. It covers the entry playbooks, the task files, which parts stay roles, where the controller writes its output, the contracts of the steps that touch a node, variable naming, and what the transports must guarantee to the controller. What the controller does (strategies, transports, registry, failure handling) is defined in *Collapse Strategy for a Raw Node Controller* v0.1.11 and *The Platform Registry* v0.1.5; this document does not change any of it.
 
-The sequencing principle is to get the flow working end to end with the simplest mechanism, then promote a part to a role once it varies independently of the rest. Applied to the repository, that meant flattening the controller role into playbooks with task files, while the transport roles, which already vary independently, stay roles. That move is done (see Changes); this version records the layout as built, the decisions taken during the move, and the changes the code still has to catch up with.
+The sequencing principle is to get the flow working end to end with the simplest mechanism, then promote a part to a role once it varies independently of the rest. Applied to the repository, that meant flattening the controller role into playbooks with task files, while the transport roles, which already vary independently, stay roles. That move is done, and so is the work that followed it (attempt states, attempt history, the report timeout parameter and the repository checks, merged as pull request 2 and tagged `v0.3.0`). This version records the layout and the checks as built. The code follows every decision in it.
 
 ## The mechanism problem
 
@@ -35,12 +35,16 @@ The role name in `include_role` can be a variable, as in the module's own loop e
 - **Every build writes an attempt record before it touches a platform,** because failure handling and `destroy.yml` both need to know what was attempted without the operator keeping the contract input around.
 - **Output is split by purpose,** because files that later runs depend on must not sit next to files that are safe to delete. Records, reports and logs each have their own directory, and `artifacts/` is kept for development and testing only.
 - **Sensitive files live outside the repository,** in a configurable `raw_node_secrets_path`, because the rendered payload carries contract values and the phone-home token, and a directory outside the repository cannot be committed by accident.
+- **A new attempt never hides a node that may still exist,** because records are the only trace of a node on the controller host. A build refuses to start while the hostname's current attempt says a node may exist, unless the operator says it is gone (see one attempt per hostname).
+- **Variable names follow the naming table, not ansible-lint's role-prefix rule,** because the controller and every transport share names such as `raw_node_transport_state`, which by definition cannot carry one role's prefix. `tools/check_variables.py` enforces the table, and `var-naming[no-role-prefix]` is switched off in `.ansible-lint` with a pointer to this document.
+- **The repository checks itself locally, with no hosted CI service,** because the checks must run the same on any host and with any remote, in keeping with avoiding lock-in. `tools/check.sh` is the one check; git hooks versioned in the repository run its fast part, and its full part is run by hand before merging (see repository checks).
 
 ## Layout
 
 ```text
 uc-raw-node/
 ├── ansible.cfg                         # roles_path = ./roles, needed by test playbooks in tests/
+├── .ansible-lint                       # Turns off var-naming[no-role-prefix], excludes spike/
 ├── build.yml                           # Entry point: the full pipeline
 ├── validate.yml                        # Registry and input checks only, nothing is built
 ├── destroy.yml                         # Tear down a node by hostname
@@ -50,12 +54,12 @@ uc-raw-node/
 │   ├── load_input.yml                  # Collects and checks the contract input
 │   ├── resolve_platform.yml            # Resolves target_platform and checks it can be used
 │   ├── prepare_paths.yml               # Expands and creates the output paths, checks secrets permissions
-│   ├── write_attempt.yml               # Writes the attempt record before anything is created
+│   ├── write_attempt.yml               # Refuses or archives the previous attempt, then writes the new record
 │   ├── set_attempt_state.yml           # Changes the attempt state, used by every later step
 │   ├── payload.yml                     # Renders raw-node-firstboot into the secrets path (placeholder)
 │   ├── wait_phone_home.yml             # Waits for the report, or asks the transport for the address
 │   ├── write_confirmation.yml          # Writes confirmation.yml
-│   └── handle_failure.yml              # Records the failure, then destroys or quarantines
+│   └── handle_failure.yml              # Records the failure, then aborts, destroys or quarantines
 ├── templates/
 │   └── raw-node-firstboot.j2           # Added with the real payload
 ├── vars/
@@ -77,13 +81,22 @@ uc-raw-node/
 │   ├── prepare_paths.yml               # Repository, ignore and permission checks
 │   ├── transport_incus_exec.yml        # Transport, including the unmarked-instance case
 │   ├── build.yml                       # Wraps build.yml with test overrides
-│   ├── build_scenarios.yml             # Runs success, payload_failure, teardown_failure, placeholders
+│   ├── build_scenarios.yml             # Runs success, payload_failure, teardown_failure, placeholders, refused_existing, adopted_failure, no_report
 │   ├── destroy.yml                     # Wraps destroy.yml
 │   ├── destroy_scenarios.yml           # Runs the four destroy cases
+│   ├── attempt_history.yml             # Runs the six attempt history cases
 │   ├── tasks/                          # Per-case helpers for the runners
 │   ├── vars/output.yml                 # Sets raw_node_root and points every output path into artifacts/
 │   ├── fixtures/
 │   └── bin/incus                       # Stand-in Incus client
+├── tools/
+│   ├── check.sh                        # The repository check: --fast or full
+│   ├── check_variables.py              # Naming table and secret-handling rules
+│   ├── install-hooks.sh                # Sets core.hooksPath, once per clone
+│   ├── check.env                       # Per host: puts Ansible on the PATH, ignored by git
+│   └── git-hooks/
+│       ├── pre-commit                  # tools/check.sh --fast
+│       └── pre-push                    # tools/check.sh --fast
 ├── records/                            # Attempt, failure and confirmation records, ignored by git
 ├── reports/                            # Address reports and validation results, ignored by git
 ├── logs/                               # Transport and payload logs, ignored by git
@@ -134,7 +147,15 @@ A confirmation is valid only while the attempt record beside it says `confirmed`
 
 ### One attempt per hostname
 
-The records directory holds one current attempt per hostname. When `write_attempt.yml` starts a new attempt for a hostname that already has records, it first moves the existing `attempt.yml`, `failure.yml` and `confirmation.yml` into `records/<hostname>/history/<started>/`, named by the earlier attempt's start time, so a stale failure or confirmation is never read as belonging to the new attempt, and the node's history is kept. Reports are overwritten, since they are safe to delete.
+The records directory holds one current attempt per hostname. `write_attempt.yml` reads the current `attempt.yml`, if there is one, before it writes anything.
+
+- **Refusal.** If the current state is `confirmed`, `quarantined`, `in_progress` or `failed`, a node may still exist, so the run stops before moving anything. The same applies to a record whose state is missing or not one of the six known states. The message names the state and gives two ways forward: destroy the node first, or pass `-e raw_node_attempt_replace=true` if the operator knows it is gone. A run left `in_progress` or `failed` is one that died, so its node may exist even though no record says so.
+- **Proceeding.** If there is no record, or the state is `aborted` or `destroyed`, or `raw_node_attempt_replace` is true, the earlier attempt's files move into history and the new attempt starts.
+- **History folder.** `records/<hostname>/history/<timestamp>/`, where the timestamp is the earlier attempt's `started`, falling back to `updated` and then to the time of the move, rewritten in the file-safe form `YYYY-MM-DD--HH-MM-SS`. It stays in UTC, as the records are, unlike session file names, which use local time. If the folder exists, `-2`, `-3` and so on are added.
+- **Order of the move.** Whichever of `attempt.yml`, `failure.yml` and `confirmation.yml` exist are copied into the history folder, then `attempt.yml` is overwritten with the new record, then the earlier `failure.yml` and `confirmation.yml` are removed. The current folder therefore never lacks an `attempt.yml`. A run that dies between the overwrite and the removal leaves an old `confirmation.yml` beside a new `in_progress` record, which the confirmation rule above makes harmless.
+- **Reports** are not moved. They are overwritten by the next attempt, since they are safe to delete.
+
+The move runs before the block, so a failure during it ends the run with nothing to clean up.
 
 ### Handling sensitive files
 
@@ -163,7 +184,7 @@ The rendered payload is the contract input turned into something that runs on th
 # payload, deliver via transport, wait for report, validate contract,
 # write confirmation.
 # Any failure inside the block runs tasks/handle_failure.yml, which writes
-# the failure record first, then destroys or quarantines the node.
+# the failure record first, then aborts (nothing was created), destroys or quarantines.
 # Failures before the block stop the run with nothing to clean up.
 
 - name: Build a raw node
@@ -230,7 +251,7 @@ The comment block at the top of `build.yml` is the pipeline's summary for a read
 
 ## Step contracts
 
-These are the steps whose behaviour a reader cannot infer from their names. Contracts marked as not yet in the code are decisions of this version that the implementation has still to follow (see first release decisions).
+These are the steps whose behaviour a reader cannot infer from their names. Each is implemented as written, and tested by the runners in `tests/`.
 
 ### Contract input
 
@@ -240,18 +261,18 @@ After the checks, it sets `raw_node_input`, a mapping of the five checked fields
 
 ### The attempt record
 
-`write_attempt.yml` writes `records/<hostname>/attempt.yml` after the output paths are prepared and before the block starts, after moving any earlier attempt's records into history (not yet in the code). It holds `hostname`, `target_platform`, `strategy`, `transport`, `started`, `updated` (the time of the last state change) and `state`.
+`write_attempt.yml` writes `records/<hostname>/attempt.yml` after the output paths are prepared and before the block starts, after the refusal check and the move into history described above. It holds `hostname`, `target_platform`, `strategy`, `transport`, `started`, `updated` (the time of the last state change) and `state`.
 
-The states are:
+The states are, with whether a new build for the same hostname may start without `raw_node_attempt_replace`:
 
-| State | Meaning | Set by |
-| :-- | :-- | :-- |
-| `in_progress` | The build has started | `write_attempt.yml` |
-| `confirmed` | The node passed validation and the confirmation is written | `write_confirmation.yml` |
-| `failed` | Failure handling has started; a record left in this state means it did not finish | `handle_failure.yml` |
-| `aborted` | The build failed before the transport created anything, so there was nothing to tear down (not yet in the code) | `handle_failure.yml` |
-| `destroyed` | A node existed and was torn down | `handle_failure.yml`, `destroy.yml` |
-| `quarantined` | A node exists in an unknown state and was left for the operator | `handle_failure.yml` |
+| State | Meaning | Set by | New build may start |
+| :-- | :-- | :-- | :-- |
+| `in_progress` | The build has started | `write_attempt.yml` | No |
+| `confirmed` | The node passed validation and the confirmation is written | `write_confirmation.yml` | No |
+| `failed` | Failure handling has started; a record left in this state means it did not finish | `handle_failure.yml` | No |
+| `aborted` | The build failed before the transport created or adopted anything, so there was nothing to tear down | `handle_failure.yml` | Yes |
+| `destroyed` | A node existed and was torn down | `handle_failure.yml`, `destroy.yml` | Yes |
+| `quarantined` | A node exists in an unknown state and was left for the operator | `handle_failure.yml` | No |
 
 `set_attempt_state.yml` reads the record from disk, sets `state` and `updated`, and writes it back. If the record is missing, it writes a new one from the hostname and platform without a start time, which happens for `destroy.yml -e target_platform` on a host that did not build the node.
 
@@ -262,7 +283,7 @@ The record contains no credentials: it is copied from the resolved platform and 
 `wait_phone_home.yml` produces the node's address and SSH host keys for the validator, or fails.
 
 - **Source.** If the entry has `reports_address: true` and `roles/raw_node_transport_<name>/tasks/address.yml` exists under `raw_node_root`, the address comes from the transport, called with `tasks_from: address`. Otherwise it comes from the phone-home receiver, matched by the attempt's one-time token. The lookup by path assumes transports live in the repository's `roles/`, which holds until roles are packaged as a collection.
-- **Timeout.** The wait is bounded by `raw_node_report_timeout`, set in `vars/defaults.yml` (600 seconds). `wait_phone_home.yml` passes it to the transport as an include parameter, so a transport's defaults never read a controller variable (not yet in the code: the Incus transport's default currently reads it). On the real Incus host, with a cached Debian 13 image, the address was available about 6 seconds after launch, so 600 seconds is generous for containers. Bare metal installs and image deployments take much longer, so this is expected to become a per-entry registry field, defined in *The Platform Registry* when the first entry needs it.
+- **Timeout.** The wait is bounded by `raw_node_report_timeout`, set in `vars/defaults.yml` (600 seconds). `wait_phone_home.yml` passes it to the transport as the include parameter `raw_node_transport_address_timeout`, so a transport's defaults never read a controller variable. On the real Incus host, with a cached Debian 13 image, the address was available about 6 seconds after launch, so 600 seconds is generous for containers. Bare metal installs and image deployments take much longer, so this is expected to become a per-entry registry field, defined in *The Platform Registry* when the first entry needs it.
 - **Output.** On success, the step writes `reports/<hostname>/report.yml` with `hostname`, `source` (`transport` or `phone_home`), `received`, `ipv4`, `ipv6` and `ssh_host_keys`, and sets `raw_node_report_*` for the validator. The host key list is empty when the image has no SSH server, which is the case for the default Debian 13 container image until the payload installs one.
 - **Failure.** On timeout, the step sets `raw_node_report_status: no_report` and fails with a message naming the timeout and the expected source, for example "no address report for web-01 from the incus_exec transport within 600 seconds". `handle_failure.yml` records the reason as `no_report`, with the message as detail. No `RN-*` clause was checked, so the record says so rather than naming a clause.
 
@@ -276,7 +297,7 @@ The record contains no credentials: it is copied from the resolved platform and 
 
 - **Capture the failure.** Before anything else, copy the failed task's name and the reason, since nested rescue sections later overwrite `ansible_failed_task` and `ansible_failed_result`.
 - **Write the failure record.** Write `records/<hostname>/failure.yml` with `hostname`, `time`, `attempt` (platform key, strategy, transport, start time), `platform` (the resolved registry entry), `failed_task`, `reason`, `detail`, `clause` and `action`, and set the attempt state to `failed`. `reason` is `raw_node_failure_reason` when it is set, a reason code such as `no_report` when a step set one, and otherwise the module's message (trimmed to 500 characters) and return code. `clause` is the `RN-*` clause that failed where one is known, "unknown" until the validator names clauses, and "none checked: no report was received" for `no_report`. The full failed result is never copied into the record.
-- **Then destroy, quarantine or abort.** If the transport created nothing in this run, set the state to `aborted` and skip teardown (not yet in the code: the state currently ends as `destroyed`). Otherwise, if the entry's `can_destroy` is true, call the transport with `tasks_from: destroy` inside its own block, and on success set the state to `destroyed`. If that block fails, its rescue section adds `teardown_error` (the teardown task, its message, and the platform's error output trimmed to 300 characters) to the failure record and sets the state to `quarantined`, with an alert. If `can_destroy` is false, set the state to `quarantined` and alert. An instance the run adopted rather than created (`raw_node_incus_allow_existing=true`) is quarantined, since the transport refuses to delete it.
+- **Then abort, quarantine or destroy,** chosen from `raw_node_transport_state` alone, which is copied while capturing the failure. An undefined value, meaning the build failed before the transport ran, counts as `none`. For `none`, set the state to `aborted`, record `action: abort`, skip teardown and print no alert. For `adopted`, set the state to `quarantined`, record `action: quarantine` and alert, without calling teardown, since the transport refuses to delete an instance it did not create. For `created`, if the entry's `can_destroy` is true, call the transport with `tasks_from: destroy` inside its own block, and on success set the state to `destroyed`. If that block fails, its rescue section adds `teardown_error` (the teardown task, its message, and the platform's error output trimmed to 300 characters) to the failure record and sets the state to `quarantined`, with an alert. If `can_destroy` is false, set the state to `quarantined` and alert.
 - **Then delete the node's secrets,** whatever the outcome of teardown.
 - **Then end the run with the original failure.** The last task fails with "Build of `<hostname>` failed at `<task>`: `<reason>`", the attempt state and the path of the failure record, so the run exits non-zero and the first error is not hidden behind a teardown error.
 
@@ -313,11 +334,12 @@ ansible-playbook destroy.yml -e hostname=web-01
 
 Every transport role meets these rules, whatever its platform. The Debian 13 VPS transport, the next one planned, inherits them rather than a new design.
 
+- **Transport state.** Every transport sets `raw_node_transport_state`, the controller's only view of what the transport did. It is `none` in the transport's very first task, before its own checks, so a transport that fails a check ends `aborted`. It becomes `adopted` once the transport has decided to use an existing instance, before it changes anything in it. It becomes `created` immediately before the command that creates an instance, so a launch that fails halfway is still torn down. The transport's own facts (for Incus, `raw_node_incus_launched` and `raw_node_incus_adopted`) are set in the same tasks, so they cannot disagree with it.
 - **Ownership marker.** When the transport creates an instance, it records on the platform that uc-raw-node created it and for which hostname. The Incus transport sets the user keys `user.uc-raw-node.created=true` and `user.uc-raw-node.hostname=<hostname>`; a cloud provider transport uses instance tags. The key names live in the role's `vars/main.yml`, so the play cannot change them.
 - **Teardown in a build run.** With `raw_node_destroy_standalone` unset or false, teardown deletes only an instance this run launched and that carries the marker. It does nothing if this run launched nothing, and refuses an instance the run adopted. The facts that prove this (for Incus, `raw_node_incus_launched` and `raw_node_incus_adopted`) are set at the start of the transport and just before launch, not at the end, so a build that fails early can never fall back on the marker alone and delete an earlier node with the same hostname.
 - **Standalone teardown.** With `raw_node_destroy_standalone: true`, which only `destroy.yml` sets, teardown deletes an instance carrying the marker for the hostname and refuses one without it.
 - **No adoption by accident.** A transport refuses to deliver to an instance that already exists unless the operator allows it for the run (for Incus, `raw_node_incus_allow_existing`). That switch lives in the role's `vars/main.yml`, so a play-level source such as `vars_files` or inventory cannot turn adoption on for every run, while `-e` still can for one.
-- **Output for the controller.** A transport hands its results back as `raw_node_transport_result` (from delivery) and `raw_node_transport_address` (from `address.yml`, with `found`, `ipv4`, `ipv6`, `ssh_host_keys` and `waited`), so the controller never reads a transport-specific variable. `address.yml` does not fail on timeout; the caller judges the result.
+- **Output for the controller.** A transport hands its results back as `raw_node_transport_result` (from delivery) and `raw_node_transport_address` (from `address.yml`, with `found`, `ipv4`, `ipv6`, `ssh_host_keys` and `waited`), so the controller never reads a transport-specific variable. `address.yml` takes its wait from the include parameter `raw_node_transport_address_timeout`, falls back to the transport's own default only when it is not given, and does not fail on timeout; the caller judges the result. The Incus transport's own wait before the payload passes the same parameter, so `address.yml` has a single input.
 - **Secrets.** The transport reads the payload from `{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}/`, writes its logs to `{{ raw_node_logs_dir }}/{{ raw_node_hostname }}/` with mode `0600`, and follows the masked-task rule for every task that touches the payload.
 
 ## First release decisions
@@ -330,12 +352,6 @@ The first release supports the `adopt` strategy with the `incus_exec` transport 
 - `handle_failure.yml` follows the failure handling order above. Post-failure fallback is not implemented until the open question in the strategy document is settled.
 
 The placeholders accept two test-only overrides so the pipeline can be exercised end to end: `raw_node_test_payload_file` (copied into the secrets directory as the payload) and `raw_node_test_skip_validation` (the validator passes with a notice). They are set only by the test wrappers and are not features.
-
-The code does not yet follow these decisions of this version:
-
-- The `aborted` state for a build that failed before anything was created.
-- Moving an earlier attempt's records into `records/<hostname>/history/<started>/`.
-- `wait_phone_home.yml` passing the timeout to the transport as an include parameter.
 
 The order in which the remaining parts are built is a roadmap, not a design decision, and is kept in the README.
 
@@ -354,7 +370,7 @@ The repository uses the `raw_node_` namespace. Within it, a second prefix names 
 | `raw_node_*_dir` (expanded paths), `raw_node_paths_*` (working values) | `prepare_paths.yml` |
 | `raw_node_attempt_*` | `write_attempt.yml`, `set_attempt_state.yml` |
 | `raw_node_payload_*` | `payload.yml` |
-| `raw_node_transport_result`, `raw_node_transport_address` | Any transport role, as its output for the controller |
+| `raw_node_transport_*` (`raw_node_transport_state`, `raw_node_transport_result`, `raw_node_transport_address`) | Any transport role, as its output for the controller |
 | `raw_node_<transport>_*` | The transport role's own working values, for example `raw_node_incus_*` |
 | `raw_node_report_*` | `wait_phone_home.yml` |
 | `raw_node_validation_*` | `raw_node_validator` |
@@ -363,7 +379,7 @@ The repository uses the `raw_node_` namespace. Within it, a second prefix names 
 | `raw_node_destroy_*`, including `raw_node_destroy_standalone` | `destroy.yml` only |
 | `raw_node_test_*` | Test wrappers only |
 
-Two names outside the namespace are operator inputs rather than step variables: `hostname` and `target_platform`. No step sets them, with one exception: `destroy.yml` sets `target_platform` from the attempt record when it was not given with `-e`.
+Some names are operator inputs rather than step variables, and no step sets them: `raw_node_attempt_replace`, `raw_node_input_file`, `hostname` and `target_platform`, with one exception: `destroy.yml` sets `target_platform` from the attempt record when it was not given with `-e`. Include parameters such as `raw_node_transport_address_timeout` are passed with `vars:`, not set, so the table does not govern them.
 
 The output path settings (`raw_node_records_path`, `raw_node_reports_path`, `raw_node_logs_path`, `raw_node_secrets_path`) come from `vars/defaults.yml`. Because a `set_fact` cannot override a value given with `-e`, `prepare_paths.yml` sets the expanded paths under separate names (`raw_node_records_dir`, `raw_node_reports_dir`, `raw_node_logs_dir`, `raw_node_secrets_dir`), and later steps read only those. Existing variable names that already work are not renamed just to fit the table.
 
@@ -376,9 +392,15 @@ Nothing enforces the prefixes. The two kinds of mistake behave differently:
 - **A typo** (`raw_node_platfrm` for `raw_node_platform`) is read as an undefined variable and fails loudly at run time.
 - **A collision** (two steps setting `raw_node_payload_path` with different meanings) fails silently: the later value wins and the earlier step's consumers read the wrong thing.
 
-A CI check makes the rule mechanical: list every variable set by `set_fact` or `register` in `tasks/`, `roles/` and the entry playbooks (`build.yml`, `validate.yml`, `destroy.yml`), and fail if one does not match a row in the table, or if the same name is set in a file the table does not list for its row. A name may therefore be set from several files only where its row lists them: `raw_node_hostname` (`load_input.yml` and `destroy.yml`), `raw_node_attempt_*` (`write_attempt.yml` and `set_attempt_state.yml`), and `raw_node_failure_reason`, which any step inside the block may set. The only unprefixed name the check accepts is `target_platform`, set by `destroy.yml`. The same check guards the secret-handling rules: it flags any task whose arguments refer to the secrets path, the payload or the token and that does not carry `no_log: true`, and any `set -x` in the payload template.
+`tools/check_variables.py` makes the rule mechanical (see repository checks). It lists every variable set by `set_fact` or `register` in `tasks/`, `roles/*/tasks/` and the entry playbooks, and fails if one matches no row in the table (`prefix`), or is set in a file its row does not list (`file`). A name may therefore be set from several files only where its row lists them: `raw_node_hostname` (`load_input.yml` and `destroy.yml`), `raw_node_attempt_*` (`write_attempt.yml` and `set_attempt_state.yml`), and `raw_node_failure_reason`. The only unprefixed name it accepts is `target_platform`, from `destroy.yml`.
 
-The trigger for writing it was around 15 to 20 variables set across the task files and roles. After the migration, 60 distinct names are set in `tasks/` and `roles/`, and 63 with the entry playbooks, well past the trigger, so the check is the next piece of work after the follow-ups above rather than a deferred item.
+The table is encoded once in the script as data, with three choices a reader should know:
+
+- The `raw_node_*_dir` row is written as the four expanded path names, since a wildcard would also match names such as `raw_node_attempt_dir`.
+- `raw_node_failure_reason` is allowed from the steps inside the block: `payload.yml`, `wait_phone_home.yml`, `write_confirmation.yml`, the transport roles and the validator.
+- The `raw_node_<transport>_*` row has one entry per transport (only `raw_node_incus_*` today), so adding a transport means adding its prefix to the script.
+
+When the check was first run, 60 distinct names were set in `tasks/` and `roles/`, and 63 with the entry playbooks.
 
 ### Contract input and precedence
 
@@ -394,7 +416,39 @@ The contract input arrives as extra vars, which have the highest precedence of a
 
 ### Test wrappers
 
-A test cannot wrap `build.yml` or `destroy.yml` with `import_playbook` and override their `vars_files` with play vars, since `vars_files` outranks play vars on the imported play. The wrappers in `tests/` therefore use two plays: the first loads `../vars/defaults.yml` and `vars/output.yml` and copies the output paths, `raw_node_root`, the registry files and the input file into `set_fact`, which outranks `vars_files` in the next play; the second is `import_playbook` of the unchanged entry playbook. The scenario runners call each wrapper as a separate `ansible-playbook` process, so each scenario has its own exit code.
+A test cannot wrap `build.yml` or `destroy.yml` with `import_playbook` and override their `vars_files` with play vars, since `vars_files` outranks play vars on the imported play. The wrappers in `tests/` therefore use two plays: the first loads `../vars/defaults.yml` and `vars/output.yml` and copies the output paths, `raw_node_root`, the registry files and the input file into `set_fact`, which outranks `vars_files` in the next play; the second is `import_playbook` of the unchanged entry playbook. The scenario runners call each wrapper as a separate `ansible-playbook` process, so each scenario has its own exit code. Against real Incus they refuse to run without a dedicated project, since the project otherwise defaults to `default`. The stand-in client can drop an instance's address after the payload runs, which makes the `no_report` path testable without a real host.
+
+### Secret-handling rules in the check
+
+The same script enforces the secret-handling rules, which are conventions that fail invisibly. The rule as first worded (flag a task whose arguments refer to the secrets path, the payload or the token) flagged harmless assertions and missed the two tasks that actually leaked: two `set_fact` tasks in `load_input.yml` that put the whole contract input in their result, which Ansible prints in full at `-v`, without naming `raw_node_input` in their arguments. Those leaks were in every release up to `v0.2.0` and are fixed in `v0.3.0`. The rule as built:
+
+- **`no_log`.** A task needs `no_log: true` if its module arguments or its task `vars:` contain a template referring to `raw_node_secrets_dir`, `raw_node_secrets_path`, `raw_node_payload_file`, `raw_node_input` or a token, or if it sets a secret-named variable with `set_fact` or `register`. Scanning task `vars:` closes the way round the rule of moving a template out of the arguments.
+- **Assertions** are judged by their messages (`fail_msg`, `msg`, `success_msg`), not by their `that` expressions, which Ansible prints as text without values.
+- **Public fields.** `raw_node_input.hostname` and `raw_node_input.initial_username` count as public, as the confirmation already treats them.
+- **Trace mode.** Any file under `templates/` containing `set -x` or `set -o xtrace` fails.
+- **Exceptions** are a comment `# ci-allow: <rule> <reason>` on the line before the task. The script reports every allowance it honours, so exceptions stay visible. There is one today, on the task that warns about unknown input fields, which reads only the field names of `raw_node_input`.
+
+Output is one line per problem (`file:line: task 'name': rule: message`), a summary count, and a non-zero exit on any problem.
+
+## Repository checks
+
+`tools/check.sh` is the one command for whether the repository is healthy. It never guesses where Ansible is: it uses `ANSIBLE_PLAYBOOK` if set, then the PATH, then sources `tools/check.env` if that file exists. That file is a plain `sh` file for the host, ignored by git, that puts Ansible on the PATH, which matters because hooks also run from editors and git clients that do not load the user's shell setup. If `ansible-playbook` is still missing, the check fails rather than passing.
+
+| Step | `--fast` | Full | Gating? |
+| :-- | :-- | :-- | :-- |
+| `tools/check_variables.py` | Yes | Yes | Yes |
+| `ansible-playbook --syntax-check` on every playbook | Yes | Yes | Yes |
+| ansible-lint on the entry playbooks and `tasks/` | Yes | Yes | Yes |
+| ansible-lint on the whole repository | No | Yes | No, the count is reported |
+| Stand-in test suite (`validate.yml` on the fixture, then the six test runners) | No | Yes | Yes |
+
+The full check takes about 6 minutes. The real-host runs are not part of it, since they need an Incus host.
+
+- **Hooks.** `tools/git-hooks/pre-commit` and `tools/git-hooks/pre-push` are plain POSIX `sh` scripts that run `tools/check.sh --fast`. Each clone enables them once with `tools/install-hooks.sh`, which sets git's `core.hooksPath` and checks that Ansible can be found. No hook manager is used.
+- **Why the full check is not in `pre-push`.** Git opens the connection to the remote before it runs `pre-push`, and GitHub closes an idle SSH connection before a six-minute hook finishes, so the push fails even though the check passed.
+- **The rule before merging to `main`** is the full `tools/check.sh`, plus the real-host runs where an Incus host is available, run by hand. The hooks are a local convenience, not a gate: `--no-verify` skips them.
+- **Lint configuration.** `.ansible-lint` turns off `var-naming[no-role-prefix]` (see the decision on variable names) and excludes `spike/`, which holds cloud-init and other files that are not Ansible. Any other exception is a narrow `# noqa: <rule>` with a reason, never a configuration skip. The gated lint passes at the `production` profile.
+- **ansible-lint's `--exclude`** takes several values, so the paths to lint come before it, or ansible-lint silently lints the whole repository. The gated run uses `--exclude roles/`, since ansible-lint otherwise follows `build.yml`'s `include_role` into the validator.
 
 ## Behaviour to know about dynamic includes
 
@@ -402,6 +456,7 @@ A test cannot wrap `build.yml` or `destroy.yml` with `import_playbook` and overr
 - **Listing.** `--list-tasks` shows the include tasks but not what is inside them, because the files are only read at run time. The comment block at the top of `build.yml` is the readable summary instead.
 - **Relative paths.** An include inside a task file resolves relative to that file first, so `validate_registry.yml` can keep including `load_registry_layer.yml` by bare name.
 - **Assertion messages.** In ansible-core 2.21, `fail_msg` is templated even when the assertion passes, so a message that reads a field which exists only on failure must guard it with `default`.
+- **Backreferences in Jinja statements.** Inside a `{% ... %}` statement, a string literal such as `'\1'` is unescaped before the filter sees it, so a `regex_replace` backreference there is written `'\\1'`.
 
 ## What is deferred, and when to revisit
 
@@ -418,31 +473,28 @@ A test cannot wrap `build.yml` or `destroy.yml` with `import_playbook` and overr
 | A general reason code (`raw_node_failure_code`) | The validator names the first `RN-*` clause |
 | Splitting checks from creation in `prepare_paths.yml` | Empty directories left by a stopped `destroy.yml` become a nuisance |
 | Dropping `raw_node_input_file` | Nothing but the tests uses it, and the fixtures move to extra vars |
+| A shared check before merge, run on a self-hosted, non-proprietary runner | A second author joins, or merges stop being done by one person who runs the full check by hand |
 
 Promoting a task file to a role is mostly mechanical: the file becomes `roles/<name>/tasks/main.yml`, its settings move to `roles/<name>/defaults/main.yml`, and the include becomes an `include_role`. Two things do change: template and file lookups resolve against the role's own directories, so templates move with it, and its settings drop to role-default precedence.
 
 ## Changes
+
+### From v0.1.10 to v0.1.11
+
+- Recorded that the follow-up work is merged (pull request 2, tagged `v0.3.0`, session record `en/docs/sessions/2026-11-21--12-42-01-session.md`), and removed every "not yet in the code" marker: the code now follows the whole document.
+- Added `raw_node_transport_state` (`none`, `adopted`, `created`) as a transport obligation and the controller's only input for choosing between abort, quarantine and destroy, and widened the transport row of the naming table to `raw_node_transport_*`.
+- Rewrote One attempt per hostname: the refusal in the four states where a node may exist (and for a missing or unknown state), `raw_node_attempt_replace`, history folder names in the file-safe form in UTC with `-2` suffixes, and the copy, overwrite, remove order of the move. Added a column to the state table for whether a new build may start.
+- Named the timeout parameter `raw_node_transport_address_timeout`, and listed the operator inputs and include parameters that the naming table does not govern.
+- Added two decisions: variable names follow the naming table rather than ansible-lint's role-prefix rule, and the repository checks itself locally with no hosted CI service.
+- Described the variable check as built (its encoding of the table), the secret-handling rules as refined after they missed the two `load_input.yml` leaks, and a new Repository checks section: `tools/check.sh` and its two modes, `tools/check.env`, the git hooks running the fast checks only, why the full check is not in `pre-push`, the rule before merging, and the lint configuration.
+- Added the Jinja backreference behaviour, the test runners' refusal to use the default Incus project, the stand-in client's `no_report` mode, and a deferred shared check before merge.
+- Trimmed the Changes section to its two most recent entries.
 
 ### From v0.1.9 to v0.1.10
 
 - Corrected the count of variables set after the migration from 22 to 60 in `tasks/` and `roles/` (63 with the entry playbooks), counted by the document's own rule.
 - Made the CI check scan the entry playbooks too, and allow a name to be set from several files only where its row in the naming table lists them, since `raw_node_hostname` and `raw_node_attempt_*` are legitimately set in two files each.
 - Added `destroy.yml` as a setter of `raw_node_hostname`, widened its row to `raw_node_destroy_*`, and stated that `hostname` and `target_platform` are operator inputs that no step sets, except `destroy.yml` setting `target_platform` from the attempt record.
-
-### From v0.1.8 to v0.1.9
-
-- Recorded that the migration from the `raw_node_controller` role is complete (branch `layout-migration`, pull request 1), and removed the Migration section, as v0.1.8 required. The procedure and the documents it updated (strategy v0.1.11, registry v0.1.5, the README) are in the session record `en/docs/sessions/2026-11-21--11-06-57-session.md`, and the layout before the migration is tagged `v0.1.0`.
-- Updated the scope to strategy v0.1.11 and registry v0.1.5, and the layout tree to the files as built, including `set_attempt_state.yml`, the transport's `vars/main.yml` and the test runners.
-- Added `raw_node_root` as the base for every repository-relative path, kept `roles_path` in `ansible.cfg` for the test playbooks, and stated that relative output paths are taken from `raw_node_root`.
-- Made ownership a decision: a transport deletes only what it can prove it created, by what the run launched in a build and by the platform's ownership marker in a standalone teardown. Added a Transport obligations section covering the marker, both teardown contexts, adoption, the transport's output for the controller and secrets.
-- Added the `aborted` state for a build that failed before anything was created, the table of attempt states, `updated` in the attempt record, history for earlier attempts' records, and the rule that a confirmation is valid only while its attempt is `confirmed`. Listed which of these the code does not follow yet.
-- Stated that contract input comes from extra vars into the `raw_node_input` mapping, with `raw_node_input_file` as an explicit alternative, and replaced the per-field `raw_node_input_*` names with the mapping in the naming table, along with `raw_node_delivery_strategy`, `raw_node_paths_*`, the transport output names, `raw_node_destroy_standalone` and `raw_node_test_*`.
-- Gave the failure record its field names, the capture-first step, the 500-character message limit, `teardown_error` with platform error output trimmed to 300 characters, and quarantine for adopted instances. Gave the report its field names and noted the empty host key list for images without an SSH server.
-- Specified `destroy.yml`'s handling of a missing platform and of a record that disagrees with `-e target_platform`, and that it runs `prepare_paths.yml`.
-- Added the no-checkout case to the repository check, directory and file modes, and masked assertion messages.
-- Added the test wrapper pattern, the `fail_msg` templating behaviour, the tested ansible-core version, and the Phase 7 timing for the report timeout.
-- Moved the CI check for variable prefixes and secret handling out of the deferred table, since the count of variables set has passed its trigger, and added four deferred items found during the migration.
-- Trimmed the Changes section to its two most recent entries, as v0.1.8 required; git history holds the rest.
 
 ## References
 

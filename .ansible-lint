@@ -14,9 +14,10 @@ exclude_paths:
 #
 # var-naming[no-role-prefix] wants every variable a role sets or reads to
 # start with the full role name (raw_node_transport_incus_exec_,
-# raw_node_validator_). The naming table in Raw Node Controller Layout
-# Design v0.1.10, Variables, Naming, deliberately gives transports the
-# shorter raw_node_<transport>_* prefix (raw_node_incus_*) and shares names
+# raw_node_validator_). The naming table in the Raw Node Controller Layout
+# Design (en/docs/design/raw-node-controller-layout-design-*.md), section
+# Variables, Naming, deliberately gives transports the shorter
+# raw_node_<transport>_* prefix (raw_node_incus_*) and shares names
 # across the controller and every transport (raw_node_hostname,
 # raw_node_payload_file, raw_node_transport_*, raw_node_validation_*).
 # tools/check_variables.py enforces that table instead.
