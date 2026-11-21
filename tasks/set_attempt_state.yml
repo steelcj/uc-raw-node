@@ -1,0 +1,55 @@
+# tasks/set_attempt_state.yml
+#
+# Changes the state in records/<hostname>/attempt.yml. Used by
+# write_confirmation.yml (confirmed), handle_failure.yml (failed, destroyed,
+# quarantined) and destroy.yml (destroyed).
+#
+# Parameter, passed with vars on the include:
+#   raw_node_attempt_new_state  in_progress, confirmed, failed, destroyed or
+#                               quarantined
+#
+# Needs raw_node_records_dir, raw_node_hostname, target_platform and
+# raw_node_platform. Reads the record from disk, so it works in a standalone
+# destroy.yml run as well as in build.yml. If the record is missing (for
+# example, destroy.yml with -e target_platform on a host that did not build
+# the node), a new record is written from the platform and hostname, without
+# a start time.
+
+- name: Check the new attempt state
+  ansible.builtin.assert:
+    that:
+      - raw_node_attempt_new_state in ['in_progress', 'confirmed', 'failed', 'destroyed', 'quarantined']
+    fail_msg: "Attempt state '{{ raw_node_attempt_new_state }}' is not a known state."
+    quiet: true
+
+- name: Set attempt record location
+  ansible.builtin.set_fact:
+    raw_node_attempt_file: "{{ raw_node_records_dir }}/{{ raw_node_hostname }}/attempt.yml"
+
+- name: Look for the attempt record
+  ansible.builtin.stat:
+    path: "{{ raw_node_attempt_file }}"
+  register: raw_node_attempt_stat
+
+- name: Write the new attempt state
+  ansible.builtin.copy:
+    dest: "{{ raw_node_attempt_file }}"
+    mode: "0644"
+    content: |
+      # Attempt record written by uc-raw-node. Public data only.
+      {{ raw_node_attempt_current
+         | combine({'updated': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ'),
+                    'state': raw_node_attempt_new_state})
+         | to_nice_yaml(indent=2, sort_keys=false) }}
+  vars:
+    raw_node_attempt_current: >-
+      {{ (lookup('ansible.builtin.file', raw_node_attempt_file) | from_yaml)
+         if raw_node_attempt_stat.stat.exists
+         else {'hostname': raw_node_hostname,
+               'target_platform': target_platform,
+               'strategy': raw_node_platform.strategy,
+               'transport': raw_node_platform.transport} }}
+
+- name: Record the attempt state
+  ansible.builtin.set_fact:
+    raw_node_attempt_state: "{{ raw_node_attempt_new_state }}"

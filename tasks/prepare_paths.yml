@@ -1,0 +1,230 @@
+# tasks/prepare_paths.yml
+#
+# Expands the output paths once, checks them, and creates the node's
+# directories. Runs after the registry, input and platform checks, so a run
+# that fails validation creates no directories, and before the attempt
+# record is written.
+#
+# Sets the expanded paths under separate names, since a set_fact cannot
+# override a value given with -e:
+#   raw_node_records_dir, raw_node_reports_dir, raw_node_logs_dir,
+#   raw_node_secrets_dir
+# Later steps read only these.
+#
+# Checks, all before anything is written:
+#   - Repository: each path is resolved with realpath and compared with the
+#     resolved repository root. Only for a path inside the repository,
+#     git check-ignore -q is run on <path>/.probe. For the secrets path, exit
+#     code 0 continues, 1 stops (not ignored), anything else stops (the check
+#     could not run). For the other paths the same outcomes only warn.
+#     Without a git checkout, every path counts as outside the repository.
+#   - Permissions: the secrets path and the node's secrets directory, where
+#     they already exist, must be directories with no group or other bits.
+#
+# Then creates <path>/<hostname>/ for records, reports and logs, and every
+# missing directory of <secrets path>/<hostname>/ one level at a time with
+# mode 0700. Existing parents, such as ~/.secrets, are left as they are.
+#
+# Tasks that touch the secrets path carry no_log. Their checks are
+# registered and judged by a separate task whose message names the setting,
+# not the path.
+
+- name: Expand output paths
+  ansible.builtin.set_fact:
+    raw_node_records_dir: "{{ [raw_node_root, raw_node_records_path | expanduser] | ansible.builtin.path_join }}"
+    raw_node_reports_dir: "{{ [raw_node_root, raw_node_reports_path | expanduser] | ansible.builtin.path_join }}"
+    raw_node_logs_dir: "{{ [raw_node_root, raw_node_logs_path | expanduser] | ansible.builtin.path_join }}"
+
+- name: Expand secrets path
+  ansible.builtin.set_fact:
+    raw_node_secrets_dir: "{{ [raw_node_root, raw_node_secrets_path | expanduser] | ansible.builtin.path_join }}"
+  no_log: true
+
+# Repository check
+
+- name: Find the repository root
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ raw_node_root }}"
+      - rev-parse
+      - --show-toplevel
+  register: raw_node_paths_git_toplevel
+  changed_when: false
+  failed_when: false
+
+- name: Set the resolved repository root
+  ansible.builtin.set_fact:
+    raw_node_paths_repo_root: >-
+      {{ (raw_node_paths_git_toplevel.stdout | trim | ansible.builtin.realpath)
+         if (raw_node_paths_git_toplevel.rc | default(1)) == 0
+            and (raw_node_paths_git_toplevel.stdout | default('') | trim | length > 0)
+         else '' }}
+
+- name: Note that the controller is not in a git checkout
+  ansible.builtin.debug:
+    msg: >-
+      {{ raw_node_root }} is not inside a git checkout, so every output path
+      is treated as outside the repository.
+  when: raw_node_paths_repo_root | length == 0
+
+- name: Find output paths inside the repository
+  ansible.builtin.set_fact:
+    raw_node_paths_inside: >-
+      {{ raw_node_paths_outputs
+         | selectattr('real', 'match', '^' ~ (raw_node_paths_repo_root | regex_escape) ~ '(/|$)')
+         | list
+         if raw_node_paths_repo_root | length > 0 else [] }}
+  vars:
+    raw_node_paths_outputs:
+      - name: raw_node_records_path
+        real: "{{ raw_node_records_dir | ansible.builtin.realpath }}"
+      - name: raw_node_reports_path
+        real: "{{ raw_node_reports_dir | ansible.builtin.realpath }}"
+      - name: raw_node_logs_path
+        real: "{{ raw_node_logs_dir | ansible.builtin.realpath }}"
+
+- name: Check whether git ignores output paths inside the repository
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ raw_node_paths_repo_root }}"
+      - check-ignore
+      - -q
+      - "{{ item.real }}/.probe"
+  loop: "{{ raw_node_paths_inside }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: raw_node_paths_ignore_checks
+  changed_when: false
+  failed_when: false
+
+- name: Warn about output paths inside the repository that git does not ignore
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ item.item.name }} ({{ item.item.real }}) is inside the
+      repository and
+      {{ 'is not ignored by git' if item.rc == 1
+         else 'the git ignore check failed with exit code ' ~ item.rc }}.
+      Add it to .gitignore or choose a path outside the repository.
+  loop: "{{ raw_node_paths_ignore_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.rc != 0
+
+- name: Resolve the secrets path
+  ansible.builtin.set_fact:
+    raw_node_paths_secrets_real: "{{ raw_node_secrets_dir | ansible.builtin.realpath }}"
+  no_log: true
+
+- name: Decide whether the secrets path is inside the repository
+  ansible.builtin.set_fact:
+    raw_node_paths_secrets_inside: >-
+      {{ raw_node_paths_repo_root | length > 0
+         and (raw_node_paths_secrets_real == raw_node_paths_repo_root
+              or raw_node_paths_secrets_real.startswith(raw_node_paths_repo_root ~ '/')) }}
+  no_log: true
+
+- name: Check whether git ignores the secrets path
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ raw_node_paths_repo_root }}"
+      - check-ignore
+      - -q
+      - "{{ raw_node_paths_secrets_real }}/.probe"
+  register: raw_node_paths_secrets_ignore
+  changed_when: false
+  failed_when: false
+  no_log: true
+  when: raw_node_paths_secrets_inside | bool
+
+- name: Stop if the secrets path is inside the repository and not ignored
+  ansible.builtin.assert:
+    that:
+      - not (raw_node_paths_secrets_inside | bool) or raw_node_paths_secrets_ignore.rc == 0
+    fail_msg: >-
+      raw_node_secrets_path is inside the repository and
+      {{ 'is not ignored by git'
+         if (raw_node_paths_secrets_ignore.rc | default(0)) == 1
+         else 'the git ignore check could not run (exit code '
+              ~ (raw_node_paths_secrets_ignore.rc | default('unknown')) ~ ')' }}.
+      The rendered payload would be at risk of being committed. Choose a
+      path outside the repository, or add it to .gitignore.
+    quiet: true
+
+# Permissions check
+
+- name: List the directories of the node's secrets path
+  ansible.builtin.set_fact:
+    raw_node_paths_secrets_chain: >-
+      {%- set parts = (raw_node_secrets_dir ~ '/' ~ raw_node_hostname).split('/') | reject('equalto', '') | list -%}
+      {%- set chain = [] -%}
+      {%- for i in range(parts | length) -%}
+      {%- set _ = chain.append('/' ~ (parts[:i + 1] | join('/'))) -%}
+      {%- endfor -%}
+      {{ chain }}
+  no_log: true
+
+- name: Look at each directory of the node's secrets path
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ raw_node_paths_secrets_chain }}"
+  register: raw_node_paths_secrets_stats
+  no_log: true
+
+- name: Stop if the secrets path is not a private directory
+  ansible.builtin.assert:
+    that:
+      - not raw_node_paths_secrets_stat.exists or raw_node_paths_secrets_stat.isdir
+      - not raw_node_paths_secrets_stat.exists or (raw_node_paths_secrets_stat.mode | int(base=8)) % 64 == 0
+    fail_msg: >-
+      raw_node_secrets_path
+      {{ 'exists but is not a directory'
+         if not (raw_node_paths_secrets_stat.isdir | default(true))
+         else 'exists with mode ' ~ (raw_node_paths_secrets_stat.mode | default('unknown')) ~ ', which gives access to group or others' }}.
+      Set it to mode 0700 (chmod 700) before running again. Nothing has been
+      written.
+    quiet: true
+  vars:
+    raw_node_paths_secrets_stat: "{{ raw_node_paths_secrets_stats.results[-2].stat }}"
+
+- name: Stop if the node's secrets directory is not a private directory
+  ansible.builtin.assert:
+    that:
+      - not raw_node_paths_node_stat.exists or raw_node_paths_node_stat.isdir
+      - not raw_node_paths_node_stat.exists or (raw_node_paths_node_stat.mode | int(base=8)) % 64 == 0
+    fail_msg: >-
+      The node's directory under raw_node_secrets_path
+      {{ 'exists but is not a directory'
+         if not (raw_node_paths_node_stat.isdir | default(true))
+         else 'exists with mode ' ~ (raw_node_paths_node_stat.mode | default('unknown')) ~ ', which gives access to group or others' }}.
+      Set it to mode 0700 (chmod 700) before running again. Nothing has been
+      written.
+    quiet: true
+  vars:
+    raw_node_paths_node_stat: "{{ raw_node_paths_secrets_stats.results[-1].stat }}"
+
+# Create directories
+
+- name: Create the node's output directories
+  ansible.builtin.file:
+    path: "{{ item }}/{{ raw_node_hostname }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ raw_node_records_dir }}"
+    - "{{ raw_node_reports_dir }}"
+    - "{{ raw_node_logs_dir }}"
+
+- name: Create missing secrets directories one level at a time
+  ansible.builtin.file:
+    path: "{{ item.item }}"
+    state: directory
+    mode: "0700"
+  loop: "{{ raw_node_paths_secrets_stats.results }}"
+  when: not item.stat.exists
+  no_log: true
