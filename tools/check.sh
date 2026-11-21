@@ -7,10 +7,12 @@
 # In order: tools/check_variables.py, ansible-playbook --syntax-check on
 # every playbook, then for the full check ansible-lint (if installed) and
 # the stand-in test suite. ansible-lint gates on the entry playbooks and
-# tasks/, which are clean; the whole repository is linted as well, but only
-# reported (the roles' var-naming findings and a few others are follow-up
-# work, listed in the session record of 2026-11-21--12-42-01). Every step runs even if an earlier one failed;
-# each step prints one line and the exit status is non-zero if any failed.
+# tasks/; the whole repository is linted as well, but only reported (the
+# cloud-init header of spike/spike-user-data.yml cannot satisfy
+# yaml[comments]; see the session record of 2026-11-21--12-42-01). The one
+# rule turned off for the repository is in .ansible-lint, with its reason.
+# Every step runs even if an earlier one failed; each step prints one line
+# and the exit status is non-zero if any failed.
 #
 # Needs ansible-playbook on the PATH (or ANSIBLE_PLAYBOOK set to it). The
 # variable check runs with the same Python as ansible-playbook, which has

@@ -1,0 +1,16 @@
+---
+# ansible-lint configuration for uc-raw-node.
+#
+# Only one rule is turned off, and nothing else may be skipped here: add a
+# narrow "# noqa: <rule>" with a reason on the line instead.
+#
+# var-naming[no-role-prefix] wants every variable a role sets or reads to
+# start with the full role name (raw_node_transport_incus_exec_,
+# raw_node_validator_). The naming table in Raw Node Controller Layout
+# Design v0.1.10, Variables, Naming, deliberately gives transports the
+# shorter raw_node_<transport>_* prefix (raw_node_incus_*) and shares names
+# across the controller and every transport (raw_node_hostname,
+# raw_node_payload_file, raw_node_transport_*, raw_node_validation_*).
+# tools/check_variables.py enforces that table instead.
+skip_list:
+  - var-naming[no-role-prefix]
