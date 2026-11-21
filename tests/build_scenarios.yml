@@ -42,6 +42,16 @@
     raw_node_test_image: "{{ raw_node_incus_image | default('images:debian/13') }}"
 
   tasks:
+    - name: Stop if a real-host run has no dedicated project
+      ansible.builtin.assert:
+        that:
+          - raw_node_test_stand_in | bool or (raw_node_test_project != 'default')
+        fail_msg: >-
+          Against real Incus, pass a dedicated project with
+          -e raw_node_incus_project=<project>, for example uc-raw-node-test,
+          so the test never launches or deletes in the default project.
+        quiet: true
+
     - name: Expand the test output paths
       ansible.builtin.set_fact:
         raw_node_test_records: "{{ raw_node_records_path }}/{{ raw_node_test_hostname }}"
