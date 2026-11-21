@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs the full tools/check.sh, including the stand-in test suite, before a
+# push. Enabled per clone by tools/install-hooks.sh. Skipped by git push
+# --no-verify: tools/check.sh is the authority, not this hook.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec tools/check.sh --full </dev/null

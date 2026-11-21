@@ -15,6 +15,7 @@
       {{ dict(raw_node_input_required_fields
               | zip(query('ansible.builtin.vars', *raw_node_input_required_fields, default=''))) }}
   when: raw_node_input_file is not defined
+  no_log: true
 
 - name: Load contract input file
   when: raw_node_input_file is defined
@@ -22,6 +23,7 @@
     - name: Parse input file
       ansible.builtin.set_fact:
         raw_node_input: "{{ lookup('ansible.builtin.file', raw_node_input_file) | from_yaml }}"
+      no_log: true
 
     - name: Check input is a mapping
       ansible.builtin.assert:
@@ -81,6 +83,7 @@
     fail_msg: "ssh_public_key is not a single OpenSSH public key line."
     quiet: true
 
+# ci-allow: no_log reads only the field names of raw_node_input (keys), never their values
 - name: Warn about unknown input fields
   ansible.builtin.debug:
     msg: "Contract input has fields the controller does not use: {{ raw_node_input_unknown | join(', ') }}"

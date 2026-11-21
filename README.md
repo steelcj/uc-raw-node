@@ -159,6 +159,20 @@ ansible-playbook -i localhost, -c local tests/build_scenarios.yml -e raw_node_te
 ansible-playbook -i localhost, -c local tests/destroy_scenarios.yml -e raw_node_test_stand_in=false -e raw_node_incus_project=uc-raw-node-test
 ```
 
+### Checks and git hooks
+
+`tools/check.sh` is the one command for "is the repository healthy". It runs, in order, the variable and secret-handling check (`tools/check_variables.py`), `ansible-playbook --syntax-check` on every playbook, `ansible-lint` if it is installed, and the stand-in test suite above. `tools/check.sh --fast` runs only the first two, in seconds. It needs `ansible-playbook` on the PATH, or `ANSIBLE_PLAYBOOK` set to it, and writes its logs to `artifacts/check/`.
+
+`tools/check_variables.py` enforces the naming table in the layout design (every name set by `set_fact` or `register` matches a row and is set only in a file that row lists) and the secret-handling rules (`no_log: true` on any task that refers to or sets the secrets path, the payload, the contract input or a token, and no `set -x` in `templates/`). A task the rule is wrong for carries a `# ci-allow: <rule> <reason>` comment on the line above it, and the check lists every allowance it honours.
+
+The repository carries two git hooks in `tools/git-hooks/`: `pre-commit` runs `tools/check.sh --fast` and `pre-push` runs the full `tools/check.sh`. They are plain `sh` scripts that need nothing beyond git. Enable them once per clone:
+
+```sh
+tools/install-hooks.sh
+```
+
+This sets git's `core.hooksPath` to `tools/git-hooks`, so it works the same with any remote or none. The hooks are a local convenience, not a gate: `git commit --no-verify` and `git push --no-verify` skip them. Run `tools/check.sh` in full before merging to `main`.
+
 ## Output and secrets
 
 | Path | Setting | Holds |
