@@ -9,8 +9,6 @@ It does one job only. Discovery, onboarding, normalization and customization bel
 
 ## Status
 
-The layout is about to change from the controller role to playbooks with task files. See latest version of [raw-node-controller-layout-design-v0.1.8.md](en/docs/design/raw-node-controller-layout-design-v0.1.8.md) for details and in the mean time do not to build on `roles/raw_node_controller/`
-
 Early scaffold. The registry, its validation, contract input checking and the first transport are written and tested; the payload and the validator are not started, so the controller cannot build a complete raw node yet.
 
 | Part | Status |
@@ -22,6 +20,8 @@ Early scaffold. The registry, its validation, contract input checking and the fi
 | `raw_node_validator` | Not started |
 | Phone-home receiver, failure handling | Not started |
 | Other transports (`ssh`, `incus`, provider APIs, `ventoy_usb`) | Not started |
+
+The layout is about to change: the `raw_node_controller` role will be replaced by playbooks (`build.yml`, `validate.yml`, `destroy.yml`) with task files, while transports stay roles. Until that migration is done, do not build on `roles/raw_node_controller/`; the repository layout, usage and registry path below describe the current layout. See [Raw Node Controller Layout Design](en/docs/design/raw-node-controller-layout-design-v0.1.8.md) for the target layout and the migration steps.
 
 ## How it works
 
@@ -124,10 +124,11 @@ Next steps, in order:
 
 ## Design documents
 
-The design is recorded in two versioned documents, which are the authority when this README and the code disagree:
+The design is recorded in three versioned documents, which are the authority when this README and the code disagree:
 
 - *Collapse Strategy for a Raw Node Controller* (`collapsable-strategy-for-a-raw-node-controller-v0.1.10.md`): scope, strategies, transports, per-platform issue analysis, failure handling, credential exposure and the phone-home design.
 - *The Platform Registry* (`1-the-platform-registry-v0.1.4.md`): registry fields, contents, layering, validation and the consumer logic.
+- *Raw Node Controller Layout Design* (`raw-node-controller-layout-design-v0.1.8.md`): how the controller is laid out on disk, which parts are task files and which are roles, the output directories and secrets path, the step contracts, variable naming, and the migration from the current layout.
 
 ## Related
 
