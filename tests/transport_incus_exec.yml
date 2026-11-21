@@ -138,6 +138,7 @@
         # nor deleted
 
         - name: Launch a plain instance without the ownership marker
+          changed_when: true
           ansible.builtin.command:
             argv:
               - "{{ raw_node_test_incus_bin }}"
@@ -218,6 +219,7 @@
 
       always:
         - name: Delete the plain instance by hand
+          changed_when: true
           ansible.builtin.command:
             argv:
               - "{{ raw_node_test_incus_bin }}"

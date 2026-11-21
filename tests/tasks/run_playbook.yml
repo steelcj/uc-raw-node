@@ -5,7 +5,7 @@
 #   raw_node_test_playbook  path relative to tests/
 #   raw_node_test_args      extra arguments (list)
 
-- name: "Run {{ raw_node_test_playbook }} {{ raw_node_test_args | join(' ') }}"
+- name: "Run test playbook: {{ raw_node_test_playbook ~ ' ' ~ (raw_node_test_args | join(' ')) }}"
   ansible.builtin.command:
     argv: >-
       {{ ['ansible-playbook', '-i', 'localhost,', '-c', 'local', playbook_dir ~ '/' ~ raw_node_test_playbook]

@@ -104,6 +104,7 @@
   when: not (raw_node_incus_existed | bool)
 
 - name: Launch instance with the ownership marker
+  changed_when: true
   ansible.builtin.command:
     argv: >-
       {{ [raw_node_incus_bin, 'launch', raw_node_incus_image, raw_node_incus_instance,
@@ -140,6 +141,7 @@
   changed_when: false
 
 - name: Push payload
+  changed_when: true
   ansible.builtin.command:
     argv:
       - "{{ raw_node_incus_bin }}"
@@ -171,6 +173,7 @@
         msg: "{{ raw_node_failure_reason }}"
 
 - name: Run payload once
+  changed_when: true
   ansible.builtin.command:
     argv:
       - "{{ raw_node_incus_bin }}"

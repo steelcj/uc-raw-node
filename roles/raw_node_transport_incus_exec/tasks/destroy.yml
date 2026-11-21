@@ -109,6 +109,7 @@
         - not (raw_node_incus_teardown_owned | bool)
 
     - name: Delete instance
+      changed_when: true
       ansible.builtin.command:
         argv:
           - "{{ raw_node_incus_bin }}"

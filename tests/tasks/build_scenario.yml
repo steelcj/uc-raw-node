@@ -2,7 +2,7 @@
 #
 # One scenario of tests/build_scenarios.yml.
 
-- name: "Start {{ raw_node_test_scenario }} from empty output directories"
+- name: "Start from empty output directories: {{ raw_node_test_scenario }}"
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
@@ -40,7 +40,9 @@
   ansible.builtin.set_fact:
     raw_node_test_attempt: "{{ lookup('ansible.builtin.file', raw_node_test_records ~ '/attempt.yml', errors='ignore') | default('', true) | from_yaml }}"
     raw_node_test_failure: "{{ lookup('ansible.builtin.file', raw_node_test_records ~ '/failure.yml', errors='ignore') | default('', true) | from_yaml }}"
-    raw_node_test_confirmation: "{{ lookup('ansible.builtin.file', raw_node_test_records ~ '/confirmation.yml', errors='ignore') | default('', true) | from_yaml }}"
+    raw_node_test_confirmation: >-
+      {{ lookup('ansible.builtin.file', raw_node_test_records ~ '/confirmation.yml', errors='ignore')
+         | default('', true) | from_yaml }}
     raw_node_test_report: "{{ lookup('ansible.builtin.file', raw_node_test_reports ~ '/report.yml', errors='ignore') | default('', true) | from_yaml }}"
     raw_node_test_runlog: "{{ lookup('ansible.builtin.file', raw_node_test_logs ~ '/incus_exec-run.log', errors='ignore') | default('', true) }}"
     raw_node_test_console: "{{ raw_node_test_run.stdout ~ raw_node_test_run.stderr }}"
