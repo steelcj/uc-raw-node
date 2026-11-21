@@ -43,7 +43,7 @@ The controller itself is three playbooks and a set of task files. Controller ste
 
 ## Requirements
 
-- ansible-core 2.15 or later (developed with 2.21 and 2.22; earlier versions not yet tested)
+- ansible-core 2.15 or later. Tested on ansible-core 2.21.6, the first release where errors raised by an include are fatal rather than rescuable, and the rescue path passes there. Not yet tested on 2.22 or on releases before 2.21.
 - `git` on the controller host, for the check that keeps the secrets path out of the repository
 - For the Incus transport: the `incus` client on the controller host, configured for the target Incus server
 
