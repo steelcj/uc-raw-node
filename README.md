@@ -163,7 +163,7 @@ ansible-playbook -i localhost, -c local tests/destroy_scenarios.yml -e raw_node_
 
 ### Checks and git hooks
 
-`tools/check.sh` is the one command for "is the repository healthy". It runs, in order, the variable and secret-handling check (`tools/check_variables.py`), `ansible-playbook --syntax-check` on every playbook, `ansible-lint` if it is installed, and the stand-in test suite above. `tools/check.sh --fast` runs only the first two, in seconds. It needs `ansible-playbook` on the PATH, or `ANSIBLE_PLAYBOOK` set to it, and writes its logs to `artifacts/check/`. If `ansible-playbook` is not on the PATH, for example because Ansible lives in a virtual environment that is not active, or because a git hook runs it from a GUI client, `tools/check.sh` sources `tools/check.env` when that file exists. It is a plain `sh` file for this host, ignored by git, that puts Ansible on the PATH:
+`tools/check.sh` is the one command for "is the repository healthy". It runs, in order, the variable and secret-handling check (`tools/check_variables.py`), `ansible-playbook --syntax-check` on every playbook, `ansible-lint` if it is installed, and the stand-in test suite above. `tools/check.sh --fast` runs only the variable check, the syntax checks and the gating lint (over the entry playbooks and `tasks/`), in seconds. The full check also lints the whole repository (reported, not gating) and runs the stand-in test suite, and takes about 6 minutes. It needs `ansible-playbook` on the PATH, or `ANSIBLE_PLAYBOOK` set to it, and writes its logs to `artifacts/check/`. If `ansible-playbook` is not on the PATH, for example because Ansible lives in a virtual environment that is not active, or because a git hook runs it from a GUI client, `tools/check.sh` sources `tools/check.env` when that file exists. It is a plain `sh` file for this host, ignored by git, that puts Ansible on the PATH:
 
 ```sh
 PATH="$HOME/.venvs/ansible/bin:$PATH"
@@ -173,13 +173,15 @@ PATH="$HOME/.venvs/ansible/bin:$PATH"
 
 `tools/check_variables.py` enforces the naming table in the layout design (every name set by `set_fact` or `register` matches a row and is set only in a file that row lists) and the secret-handling rules (`no_log: true` on any task that refers to or sets the secrets path, the payload, the contract input or a token, and no `set -x` in `templates/`). A task the rule is wrong for carries a `# ci-allow: <rule> <reason>` comment on the line above it, and the check lists every allowance it honours.
 
-The repository carries two git hooks in `tools/git-hooks/`: `pre-commit` runs `tools/check.sh --fast` and `pre-push` runs the full `tools/check.sh`. They are plain `sh` scripts that need nothing beyond git. Enable them once per clone:
+The repository carries two git hooks in `tools/git-hooks/`, `pre-commit` and `pre-push`. Both run the fast checks, `tools/check.sh --fast`. They are plain `sh` scripts that need nothing beyond git. Enable them once per clone:
 
 ```sh
 tools/install-hooks.sh
 ```
 
-This sets git's `core.hooksPath` to `tools/git-hooks`, so it works the same with any remote or none. It also checks that `ansible-playbook` can be found the way `tools/check.sh` finds it, and if not, says to create `tools/check.env`. The hooks are a local convenience, not a gate: `git commit --no-verify` and `git push --no-verify` skip them. Run `tools/check.sh` in full before merging to `main`.
+This sets git's `core.hooksPath` to `tools/git-hooks`, so it works the same with any remote or none. It also checks that `ansible-playbook` can be found the way `tools/check.sh` finds it, and if not, says to create `tools/check.env`. The hooks are a local convenience, not a gate: `git commit --no-verify` and `git push --no-verify` skip them.
+
+The rule before merging to `main` is the full check, run by hand: `tools/check.sh`, which includes the stand-in test suite, and the real-host runs under Tests where an Incus host is available. The full check is not in the `pre-push` hook. It takes about 6 minutes, which is longer than GitHub keeps an SSH connection open while a `pre-push` hook runs: git opens the connection before the hook starts, GitHub closes it while the hook is still running, and the push fails even though the check passed.
 
 ## Output and secrets
 

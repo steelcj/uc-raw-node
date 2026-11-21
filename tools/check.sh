@@ -1,13 +1,14 @@
 #!/bin/sh
 # tools/check.sh: is the repository healthy?
 #
-#   tools/check.sh          the full check (the default)
-#   tools/check.sh --fast   the variable check and the syntax checks only
+#   tools/check.sh          the full check (the default), about 6 minutes
+#   tools/check.sh --fast   the variable, syntax and gating lint checks, in
+#                           seconds; what both git hooks run
 #
 # In order: tools/check_variables.py, ansible-playbook --syntax-check on
-# every playbook, then for the full check ansible-lint (if installed) and
-# the stand-in test suite. ansible-lint gates on the entry playbooks and
-# tasks/; the whole repository is linted as well, but only reported. The
+# every playbook, ansible-lint (if installed) gating on the entry playbooks
+# and tasks/, then for the full check only an advisory ansible-lint of the
+# whole repository (reported, not gating) and the stand-in test suite. The
 # one rule turned off and the one directory excluded are in .ansible-lint,
 # with their reasons.
 # Every step runs even if an earlier one failed; each step prints one line
@@ -87,18 +88,22 @@ echo "check.sh: $mode check, logs in artifacts/check/"
 step variables "$python" tools/check_variables.py
 step syntax syntax_all
 
+lint=
+if command -v ansible-lint >/dev/null 2>&1 || [ -x "$bindir/ansible-lint" ]; then
+    lint=$(command -v ansible-lint || echo "$bindir/ansible-lint")
+    # Paths before --exclude, which takes several values.
+    step ansible-lint "$lint" build.yml validate.yml destroy.yml tasks/ --exclude roles/
+else
+    line=$(printf '%-24s %-4s' ansible-lint skip)
+    echo "$line (not installed)"
+fi
+
 if [ "$mode" = full ]; then
-    if command -v ansible-lint >/dev/null 2>&1 || [ -x "$bindir/ansible-lint" ]; then
-        lint=$(command -v ansible-lint || echo "$bindir/ansible-lint")
-        # Paths before --exclude, which takes several values.
-        step ansible-lint "$lint" build.yml validate.yml destroy.yml tasks/ --exclude roles/
+    if [ -n "$lint" ]; then
         "$lint" --nocolor -f pep8 >"$logs/ansible-lint-all.log" 2>&1
         found=$(grep -cE '^[^ ]+:[0-9]+' "$logs/ansible-lint-all.log")
         line=$(printf '%-24s %-4s' ansible-lint-all note)
         echo "$line $found findings in the whole repository (reported, not gating)"
-    else
-        line=$(printf '%-24s %-4s' ansible-lint skip)
-        echo "$line (not installed)"
     fi
     export PATH="$bindir:$PATH"
     step validate "$bindir/ansible-playbook" validate.yml \

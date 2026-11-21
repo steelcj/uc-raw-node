@@ -18,7 +18,7 @@ for hook in tools/git-hooks/*; do
 done
 git config core.hooksPath tools/git-hooks
 echo "install-hooks: core.hooksPath is now tools/git-hooks for $root"
-echo "install-hooks: pre-commit runs tools/check.sh --fast, pre-push runs tools/check.sh --full"
+echo "install-hooks: pre-commit and pre-push both run tools/check.sh --fast; run the full tools/check.sh by hand before merging to main"
 
 found=$(
     if [ -z "${ANSIBLE_PLAYBOOK:-}" ] && ! command -v ansible-playbook >/dev/null 2>&1 \
