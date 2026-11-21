@@ -1,6 +1,6 @@
 # Kickoff: Controller Layout Migration
 
-- **Version:** 0.1.1
+- **Version:** 0.1.3
 - **Date:** 2026-11-21
 - **License:** Proprietary / Internal Use Only
 - **Author:** Christopher Steel
@@ -19,6 +19,7 @@ Read these before changing anything, in this order:
 
 - `en/docs/design/raw-node-controller-layout-design-v0.1.8.md`, the authority for this work. Its Migration section is your checklist.
 - `README.md`
+- `en/docs/sessions/README.md`, for how session records and kickoffs are named. Follow it for every file you write in `en/docs/sessions/`.
 - `en/docs/collapsable-strategy-for-a-raw-node-controller-v0.1.10.md` and `en/docs/1-the-platform-registry-v0.1.4.md`, for what the controller does. Do not change behaviour they define.
 - Everything under `roles/` and `tests/`.
 
@@ -115,7 +116,7 @@ Checks: build a node with `tests/build.yml`, then destroy it with `destroy.yml` 
 - Update `README.md`: status table, build order (priority 1 is `incus_container_default` on Debian 13; priority 2 is a Debian 13 VPS, which replaces `incus_container_cloud` as the next platform after it; keep the remaining steps after those two), layout, usage (`build.yml`, `validate.yml`, `destroy.yml`), registry path, and the operational notes listed at the end of the design's Migration section (records are operational state; where the secrets path is; backups and cloud sync of the home directory copy the secrets path and records; a second controller host starts with no secrets and no records).
 - Create the next version of the two design documents the Migration section names, each by `git mv` of the current file to the new version number and then editing: `collapsable-strategy-for-a-raw-node-controller-v0.1.11.md` (entry point is `build.yml`; the payload and token are staged in the secrets path) and `1-the-platform-registry-v0.1.5.md` (registry path is `registry/base.yml`; no paths into the old role). Change only what the move requires, update the version and date in each metadata block, and add a Changes entry.
 - Do not create v0.1.9 of the layout design. I will write that myself from your session record.
-- Write a session record at `en/docs/dev/2026-11-21-layout-migration-session.md` with: what was done in each phase; every place you departed from v0.1.8, with the reason; the outcome of each known gap default; anything you found that the design does not cover; which checks were run, and which still need a real Incus host; and open questions for me.
+- Write a session record in `en/docs/sessions/`, named by the convention in that directory's README: create it at the start of the session as `$(date +%Y-%m-%d--%H-%M-%S)-session.md`, and keep adding to the same file as you go, so a session that stops early still leaves a record. By the end it holds: what was done in each phase; every place you departed from v0.1.8, with the reason; the outcome of each known gap default; anything you found that the design does not cover; which checks were run, and which still need a real Incus host; and open questions for me.
 
 Final check: run every test playbook from the repository root, once more, in one go, and include the summary in the session record.
 
@@ -139,9 +140,20 @@ Stop and ask before going on if:
 - A step in the design cannot be implemented as written without changing what the strategy or registry document defines.
 - A known gap default turns out not to work.
 - A check fails and the fix would change a step contract.
-- You would need to delete or rewrite anything outside `roles/`, `tasks/`, `vars/`, `registry/`, `tests/`, the playbooks, `.gitignore`, `ansible.cfg`, `README.md` and the documents named in Phase 6.
+- You would need to delete or rewrite anything outside `roles/`, `tasks/`, `vars/`, `registry/`, `tests/`, the playbooks, `.gitignore`, `ansible.cfg`, `README.md`, your session record in `en/docs/sessions/` and the documents named in Phase 6.
 
 ## Changes
+
+### From v0.1.2 to v0.1.3
+
+- Named the sessions README by its path, `en/docs/sessions/README.md`, as its own item in Read first, since Claude Code does not know which directory the kickoff was pasted from.
+- Moved the session record from `en/docs/dev/` to `en/docs/sessions/`, named by that directory's timestamp convention, and asked for it to be created at the start of the session and kept up to date.
+- Added the session record to the files Claude Code may write without asking.
+- Set the version in the metadata block, which still read 0.1.1.
+
+### From v0.1.1 to v0.1.2
+
+- Pointed Claude Code to the sessions README for how sessions are recorded.
 
 ### From v0.1.0 to v0.1.1
 
