@@ -57,6 +57,7 @@
       loop:
         - fake-incus.json
         - fake-incus.json.fail-delete
+        - fake-incus.json.drop-address
       when: raw_node_test_stand_in | bool
 
     - name: Start from empty records

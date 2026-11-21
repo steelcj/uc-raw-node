@@ -9,7 +9,7 @@ The role runs on the controller host, which must have the `incus` client configu
 | File | Called by | Does |
 | :-- | :-- | :-- |
 | `tasks/main.yml` | `build.yml` (`include_role`) | Launches or adopts the instance, delivers and runs the payload |
-| `tasks/address.yml` | `main.yml`, and the controller's `wait_phone_home.yml` with `tasks_from: address` | Reports the instance's global addresses and SSH host public keys |
+| `tasks/address.yml` | `main.yml`, and the controller's `wait_phone_home.yml` with `tasks_from: address` and `raw_node_transport_address_timeout` | Reports the instance's global addresses and SSH host public keys |
 | `tasks/destroy.yml` | The controller's `handle_failure.yml` and `destroy.yml`, with `tasks_from: destroy` | Deletes the instance, if this controller created it |
 
 ## What main.yml does
@@ -73,7 +73,8 @@ Teardown outcomes:
 | `raw_node_incus_profiles` | `[default]` | Profiles applied at launch |
 | `raw_node_incus_create` | `true` | Create the instance if it is missing |
 | `raw_node_incus_wait_timeout` | `120` | Seconds `main.yml` waits for a running instance with a global address |
-| `raw_node_incus_address_timeout` | `raw_node_report_timeout`, else `raw_node_incus_wait_timeout` | Seconds `address.yml` waits when called by the controller |
+| `raw_node_transport_address_timeout` | Passed by the caller | Seconds `address.yml` waits; the generic parameter every transport's `address.yml` takes. The controller's `wait_phone_home.yml` passes its `raw_node_report_timeout`, and `main.yml` passes `raw_node_incus_wait_timeout` |
+| `raw_node_incus_address_timeout` | `{{ raw_node_incus_wait_timeout }}` | Fallback for `address.yml` when the caller passes no timeout; never reads a controller variable |
 | `raw_node_payload_file` | `{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}/raw-node-firstboot` | Payload rendered by `payload.yml` |
 | `raw_node_incus_run_log` | `{{ raw_node_logs_dir }}/{{ raw_node_hostname }}/incus_exec-run.log` | Run log |
 | `raw_node_incus_payload_dest` | `/root/raw-node-firstboot` | Absolute path for the payload inside the instance |

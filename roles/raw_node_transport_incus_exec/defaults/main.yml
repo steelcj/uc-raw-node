@@ -24,9 +24,11 @@ raw_node_incus_create: true
 # address.
 raw_node_incus_wait_timeout: 120
 
-# Seconds address.yml waits when the controller's wait_phone_home.yml calls
-# it. main.yml passes raw_node_incus_wait_timeout instead.
-raw_node_incus_address_timeout: "{{ raw_node_report_timeout | default(raw_node_incus_wait_timeout) }}"
+# Seconds address.yml waits when its caller passes no
+# raw_node_transport_address_timeout. The controller's wait_phone_home.yml
+# passes its report timeout, and main.yml passes raw_node_incus_wait_timeout,
+# so this is only a fallback. It never reads a controller variable.
+raw_node_incus_address_timeout: "{{ raw_node_incus_wait_timeout }}"
 
 # The payload rendered by the controller's payload.yml, in the node's
 # secrets directory (raw_node_secrets_dir is set by prepare_paths.yml).

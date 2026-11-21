@@ -4,8 +4,10 @@
 # by main.yml after launch, and by the controller's wait_phone_home.yml with
 # tasks_from: address.
 #
-# Waits up to raw_node_incus_address_timeout seconds for the instance to be
-# running with at least one global address. Does not fail on timeout: it
+# Waits up to raw_node_transport_address_timeout seconds, the generic
+# parameter every transport's address.yml takes, for the instance to be
+# running with at least one global address. When the caller gives no
+# timeout, it falls back to this role's raw_node_incus_address_timeout. Does not fail on timeout: it
 # sets raw_node_transport_address and leaves the decision to the caller,
 # which knows what the wait was for.
 #
@@ -14,6 +16,10 @@
 #   ipv4, ipv6     lists of global addresses, interfaces other than lo
 #   ssh_host_keys  lines of /etc/ssh/ssh_host_*_key.pub, empty if none
 #   waited         seconds the wait was bounded by
+
+- name: Choose how long to wait for the address
+  ansible.builtin.set_fact:
+    raw_node_incus_address_wait: "{{ raw_node_transport_address_timeout | default(raw_node_incus_address_timeout, true) | int }}"
 
 - name: Wait for instance to run with a global address
   ansible.builtin.command:
@@ -36,7 +42,7 @@
          | rejectattr('key', 'equalto', 'lo')
          | map(attribute='value.addresses') | flatten
          | selectattr('scope', 'equalto', 'global') | list | length) > 0
-  retries: "{{ [((raw_node_incus_address_timeout | int) / 5) | round(0, 'ceil') | int, 1] | max }}"
+  retries: "{{ [((raw_node_incus_address_wait | int) / 5) | round(0, 'ceil') | int, 1] | max }}"
   delay: 5
 
 - name: Set instance addresses
@@ -76,4 +82,4 @@
       ssh_host_keys: >-
         {{ (raw_node_incus_host_keys.stdout_lines | default([]))
            | select('match', '^(ssh-|ecdsa-|sk-)') | list }}
-      waited: "{{ raw_node_incus_address_timeout | int }}"
+      waited: "{{ raw_node_incus_address_wait | int }}"

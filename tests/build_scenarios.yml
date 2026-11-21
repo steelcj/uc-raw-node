@@ -38,7 +38,8 @@
     raw_node_test_scenarios: >-
       {{ ['success', 'payload_failure']
          + (['teardown_failure'] if raw_node_test_stand_in | bool else [])
-         + ['placeholders', 'refused_existing', 'adopted_failure'] }}
+         + ['placeholders', 'refused_existing', 'adopted_failure']
+         + (['no_report'] if raw_node_test_stand_in | bool else []) }}
     raw_node_test_image: "{{ raw_node_incus_image | default('images:debian/13') }}"
 
   tasks:
@@ -67,6 +68,7 @@
       loop:
         - fake-incus.json
         - fake-incus.json.fail-delete
+        - fake-incus.json.drop-address
       when: raw_node_test_stand_in | bool
 
     - name: Look for a leftover test instance

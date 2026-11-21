@@ -26,7 +26,8 @@
       {{ ['ansible-playbook', '-i', 'localhost,', '-c', 'local',
           playbook_dir ~ '/build.yml', '-e', 'raw_node_test_scenario=' ~ raw_node_test_scenario]
          + raw_node_test_extra_args
-         + (['-e', 'raw_node_incus_allow_existing=true'] if raw_node_test_scenario == 'adopted_failure' else []) }}
+         + (['-e', 'raw_node_incus_allow_existing=true'] if raw_node_test_scenario == 'adopted_failure' else [])
+         + (['-e', 'raw_node_report_timeout=7'] if raw_node_test_scenario == 'no_report' else []) }}
     chdir: "{{ playbook_dir }}/.."
   environment:
     PATH: "{{ raw_node_test_path }}"
@@ -209,6 +210,31 @@
     fail_msg: "adopted_failure: {{ raw_node_test_failure }} {{ raw_node_test_console[-1500:] }}"
     quiet: true
   when: raw_node_test_scenario == 'adopted_failure'
+
+- name: Check the no report scenario
+  ansible.builtin.assert:
+    that:
+      - raw_node_test_run.rc != 0
+      - raw_node_test_attempt.state == 'destroyed'
+      - raw_node_test_failure.failed_task == 'Fail on missing report'
+      - raw_node_test_failure.reason == 'no_report'
+      - "'within 7 seconds' in raw_node_test_failure.detail"
+      - raw_node_test_failure.clause is search('none checked')
+      - raw_node_test_failure.action == 'destroy'
+      - raw_node_test_report == none
+      - not (raw_node_test_exists | bool)
+      # The whole run is bounded by the 7 seconds passed to the transport:
+      # with the transport's own 120 second fallback, or the controller's
+      # 600, it could not finish in under a minute.
+      - raw_node_test_run_seconds | float < 60
+    fail_msg: "no_report: run took {{ raw_node_test_run_seconds }} s. {{ raw_node_test_failure }} {{ raw_node_test_console[-1500:] }}"
+    quiet: true
+  vars:
+    raw_node_test_run_seconds: >-
+      {{ (raw_node_test_run.delta.split(':')[0] | int) * 3600
+         + (raw_node_test_run.delta.split(':')[1] | int) * 60
+         + (raw_node_test_run.delta.split(':')[2] | float) }}
+  when: raw_node_test_scenario == 'no_report'
 
 - name: Collect the scenario result
   ansible.builtin.set_fact:

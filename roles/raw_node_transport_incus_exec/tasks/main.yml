@@ -117,7 +117,7 @@
 - name: Wait for instance address
   ansible.builtin.include_tasks: address.yml
   vars:
-    raw_node_incus_address_timeout: "{{ raw_node_incus_wait_timeout }}"
+    raw_node_transport_address_timeout: "{{ raw_node_incus_wait_timeout }}"
 
 - name: Fail if the instance did not come up
   ansible.builtin.fail:
