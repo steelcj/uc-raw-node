@@ -1,0 +1,28 @@
+# roles/raw_node_controller/tasks/load_registry_layer.yml
+- name: "Load registry layer {{ raw_node_registry_file }}"
+  block:
+    - name: Parse layer
+      ansible.builtin.set_fact:
+        raw_node_registry_layer: "{{ lookup('ansible.builtin.file', raw_node_registry_file) | from_yaml }}"
+
+    - name: Check layer shape
+      ansible.builtin.assert:
+        that:
+          - raw_node_registry_layer is mapping
+          - raw_node_registry_layer.keys() | list == ['platforms']
+          - raw_node_registry_layer.platforms is mapping
+        quiet: true
+
+    - name: Merge layer
+      ansible.builtin.set_fact:
+        raw_node_registry: >-
+          {{ raw_node_registry | default({})
+             | combine(raw_node_registry_layer, recursive=True) }}
+
+  rescue:
+    - name: Report unusable layer
+      ansible.builtin.fail:
+        msg: >-
+          Registry layer {{ raw_node_registry_file }} could not be loaded
+          or does not have the expected shape (a mapping with a single
+          'platforms' key). {{ ansible_failed_result.msg | default('') }}

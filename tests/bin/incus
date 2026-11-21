@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+# Minimal stand-in for the incus client, for testing the transport role
+# where no Incus host is available. State lives in $FAKE_INCUS_STATE.
+import json, os, sys, subprocess
+state_file = os.environ.get("FAKE_INCUS_STATE", "/tmp/fake-incus.json")
+state = json.load(open(state_file)) if os.path.exists(state_file) else {}
+a = [x for x in sys.argv[1:] if not x.startswith("--project")]
+def save(): json.dump(state, open(state_file, "w"))
+def inst(n):
+    return {"name": n, "status": "Running", "state": {"network": {
+        "lo": {"addresses": [{"family": "inet", "address": "127.0.0.1", "scope": "local"}]},
+        "eth0": {"addresses": [{"family": "inet", "address": "10.10.10.5", "scope": "global"},
+                               {"family": "inet6", "address": "fd42::5", "scope": "global"}]}}}}
+cmd = a[0]
+if cmd == "list":
+    names = [x for x in a[1:] if not x.startswith("--")]
+    out = [inst(n) for n in state if not names or n.startswith(names[0])]
+    print(json.dumps(out))
+elif cmd == "launch":
+    state[a[2]] = {"image": a[1], "files": {}}; save()
+elif cmd == "file" and a[1] == "push":
+    src, dst = [x for x in a[2:] if not x.startswith("--")]
+    n, path = dst.split("/", 1)
+    state[n]["files"]["/" + path] = src; save()
+elif cmd == "exec":
+    n = a[1]; rest = a[a.index("--") + 1:]
+    if rest[0] == "sh": sys.exit(0)
+    if rest[0] == "rm": state[n]["files"].pop(rest[-1], None); save(); sys.exit(0)
+    src = state[n]["files"].get(rest[0])
+    if not src: print("not found", file=sys.stderr); sys.exit(127)
+    sys.exit(subprocess.call([src]))
+elif cmd == "delete":
+    state.pop(a[-1], None); save()
+else:
+    print("fake incus: unsupported", a, file=sys.stderr); sys.exit(2)

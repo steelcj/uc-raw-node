@@ -1,0 +1,25 @@
+# roles/raw_node_transport_incus_exec/tasks/destroy.yml
+#
+# Called by the controller's failure.yml when can_destroy is true.
+# Only deletes an instance this transport created in the current run.
+
+- name: Delete instance created by this run
+  ansible.builtin.command:
+    argv:
+      - "{{ raw_node_incus_bin }}"
+      - delete
+      - --force
+      - "--project={{ raw_node_transport_result.project }}"
+      - "{{ raw_node_transport_result.instance }}"
+  when:
+    - raw_node_transport_result is defined
+    - raw_node_transport_result.created | bool
+
+- name: Note that an adopted instance was left in place
+  ansible.builtin.debug:
+    msg: >-
+      Instance '{{ raw_node_transport_result.instance }}' existed before this
+      run and was not deleted. Handle it manually.
+  when:
+    - raw_node_transport_result is defined
+    - not (raw_node_transport_result.created | bool)

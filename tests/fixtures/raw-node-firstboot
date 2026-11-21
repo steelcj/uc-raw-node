@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stand-in payload for transport tests. The real one comes from payload.yml.
+echo "raw-node-firstboot stand-in ran as $(id -u) on $(hostname)"

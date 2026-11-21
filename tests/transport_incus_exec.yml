@@ -1,0 +1,58 @@
+# tests/transport_incus_exec.yml
+#
+# Runs registry validation, resolves incus_container_default, then delivers
+# a stand-in payload with raw_node_transport_incus_exec.
+#
+# Against a real Incus host:
+#   ansible-playbook -i localhost, -c local tests/transport_incus_exec.yml
+#
+# Destroy the test instance afterwards with -e raw_node_test_destroy=true,
+# or by hand with: incus delete --force rn-test-incus-exec
+
+- name: Test raw_node_transport_incus_exec
+  hosts: localhost
+  gather_facts: false
+  vars:
+    target_platform: incus_container_default
+    raw_node_input_file: "{{ playbook_dir }}/fixtures/raw-node-input.yml"
+    raw_node_artifacts_dir: "{{ playbook_dir }}/../artifacts/{{ raw_node_hostname }}"
+    raw_node_payload_file: "{{ playbook_dir }}/fixtures/raw-node-firstboot"
+    raw_node_test_destroy: false
+  tasks:
+    - name: Load and validate the registry
+      ansible.builtin.include_role:
+        name: raw_node_controller
+        tasks_from: validate_registry.yml
+        public: true
+
+    - name: Load and check the contract input
+      ansible.builtin.include_role:
+        name: raw_node_controller
+        tasks_from: load_input.yml
+        public: true
+
+    - name: Resolve the target platform
+      ansible.builtin.include_role:
+        name: raw_node_controller
+        tasks_from: resolve_platform.yml
+        public: true
+
+    - name: Ensure artifacts directory exists
+      ansible.builtin.file:
+        path: "{{ raw_node_artifacts_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Deliver through transport
+      ansible.builtin.include_role:
+        name: "raw_node_transport_{{ raw_node_platform.transport }}"
+
+    - name: Show transport result
+      ansible.builtin.debug:
+        var: raw_node_transport_result
+
+    - name: Destroy test instance
+      ansible.builtin.include_role:
+        name: raw_node_transport_incus_exec
+        tasks_from: destroy.yml
+      when: raw_node_test_destroy | bool

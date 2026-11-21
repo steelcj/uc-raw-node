@@ -1,0 +1,19 @@
+#cloud-config
+users:
+  - name: initial
+    groups: sudo
+    shell: /bin/bash
+    lock_passwd: false
+    hashed_passwd: "$6$7hrSuIDK.fk2UhzH$mrDMuuWcPMvm3.SiCWMpNyl87Xihk19aDZraYmp2yUcEUoqUfiQjVVA3OmVV8eKtg18WQtTxRZWSRTKf2Awa7."
+    ssh_authorized_keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB23smky5gSvrdOOYqyt+sck93NqAMqrz322BX18h1d9 initial@laptop"
+chpasswd:
+  expire: false
+  users:
+    - name: root
+      password: "$6$7hrSuIDK.fk2UhzH$mrDMuuWcPMvm3.SiCWMpNyl87Xihk19aDZraYmp2yUcEUoqUfiQjVVA3OmVV8eKtg18WQtTxRZWSRTKf2Awa7."
+      type: hash
+packages:
+  - openssh-server
+  - foomuuri
+  - sudo

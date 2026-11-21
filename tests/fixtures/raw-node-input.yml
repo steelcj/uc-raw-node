@@ -1,0 +1,6 @@
+# Test input only. The hashes and key are fake; they only match the expected formats.
+hostname: rn-test-incus-exec
+root_password_hash: "$6$rntest$MnCGs5p2Bwt0Iy6.2Y8yXyhhyO4b3eAmmyb9cQ6f7G6s3x0tLhb3xYk8Q0lX7m6gk3o9rvT0iPZVq0bYHk7vB/"
+initial_username: initial
+initial_password_hash: "$6$rntest$MnCGs5p2Bwt0Iy6.2Y8yXyhhyO4b3eAmmyb9cQ6f7G6s3x0tLhb3xYk8Q0lX7m6gk3o9rvT0iPZVq0bYHk7vB/"
+ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTestsOnly0000000000000000000000000 test@uc-raw-node"

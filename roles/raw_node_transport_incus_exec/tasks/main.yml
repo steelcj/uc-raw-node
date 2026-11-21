@@ -1,0 +1,185 @@
+# roles/raw_node_transport_incus_exec/tasks/main.yml
+#
+# Delivers raw-node-firstboot to an Incus instance with incus file push and
+# runs it once with incus exec. Runs on the controller host, which has the
+# incus client configured.
+
+- name: Check transport inputs
+  ansible.builtin.assert:
+    that:
+      - raw_node_platform is defined
+      - raw_node_platform.transport == 'incus_exec'
+      - raw_node_incus_instance is string and raw_node_incus_instance | length > 0
+      - raw_node_incus_payload_dest is match('^/')
+    fail_msg: >-
+      raw_node_transport_incus_exec needs raw_node_platform with transport
+      incus_exec, a non-empty raw_node_incus_instance (usually from
+      raw_node_hostname) and an absolute raw_node_incus_payload_dest.
+    quiet: true
+
+- name: Check payload exists on the controller
+  ansible.builtin.stat:
+    path: "{{ raw_node_payload_file }}"
+  register: raw_node_incus_payload_stat
+
+- name: Assert payload exists
+  ansible.builtin.assert:
+    that:
+      - raw_node_incus_payload_stat.stat.exists
+      - raw_node_incus_payload_stat.stat.isreg
+    fail_msg: "Payload {{ raw_node_payload_file }} not found. payload.yml must run before the transport."
+    quiet: true
+
+- name: Look up instance
+  ansible.builtin.command:
+    argv:
+      - "{{ raw_node_incus_bin }}"
+      - list
+      - "--project={{ raw_node_incus_project }}"
+      - --format=json
+  register: raw_node_incus_list
+  changed_when: false
+
+- name: Record whether instance exists
+  ansible.builtin.set_fact:
+    raw_node_incus_existed: >-
+      {{ raw_node_incus_list.stdout | from_json
+         | selectattr('name', 'equalto', raw_node_incus_instance)
+         | list | length > 0 }}
+
+- name: Refuse to adopt an instance that already exists
+  ansible.builtin.assert:
+    that:
+      - not (raw_node_incus_existed | bool) or (raw_node_incus_allow_existing | bool)
+    fail_msg: >-
+      Instance '{{ raw_node_incus_instance }}' already exists in project
+      '{{ raw_node_incus_project }}'. Set raw_node_incus_allow_existing to
+      true to adopt it deliberately.
+    quiet: true
+
+- name: Refuse to continue when the instance is missing and creation is off
+  ansible.builtin.assert:
+    that:
+      - (raw_node_incus_existed | bool) or (raw_node_incus_create | bool)
+    fail_msg: "Instance '{{ raw_node_incus_instance }}' does not exist and raw_node_incus_create is false."
+    quiet: true
+
+- name: Launch instance
+  ansible.builtin.command:
+    argv: >-
+      {{ [raw_node_incus_bin, 'launch', raw_node_incus_image, raw_node_incus_instance,
+          '--project=' ~ raw_node_incus_project]
+         + (raw_node_incus_profiles | map('regex_replace', '^', '--profile=') | list) }}
+  when: not (raw_node_incus_existed | bool)
+  register: raw_node_incus_launch
+
+- name: Wait for instance to run with a global address
+  ansible.builtin.command:
+    argv:
+      - "{{ raw_node_incus_bin }}"
+      - list
+      - "{{ raw_node_incus_instance }}"
+      - "--project={{ raw_node_incus_project }}"
+      - --format=json
+  register: raw_node_incus_state
+  changed_when: false
+  until: >-
+    (raw_node_incus_state.stdout | from_json
+     | selectattr('name', 'equalto', raw_node_incus_instance) | list | length > 0)
+    and ((raw_node_incus_state.stdout | from_json
+          | selectattr('name', 'equalto', raw_node_incus_instance) | first).status == 'Running')
+    and (((raw_node_incus_state.stdout | from_json
+          | selectattr('name', 'equalto', raw_node_incus_instance) | first).state.network | default({}, true)
+          | dict2items | rejectattr('key', 'equalto', 'lo')
+          | map(attribute='value.addresses') | flatten
+          | selectattr('scope', 'equalto', 'global') | list | length) > 0)
+  retries: "{{ (raw_node_incus_wait_timeout | int / 5) | round(0, 'ceil') | int }}"
+  delay: 5
+
+- name: Wait for init system to settle
+  ansible.builtin.command:
+    argv:
+      - "{{ raw_node_incus_bin }}"
+      - exec
+      - "{{ raw_node_incus_instance }}"
+      - "--project={{ raw_node_incus_project }}"
+      - --
+      - sh
+      - -c
+      - "if command -v systemctl >/dev/null 2>&1; then systemctl is-system-running --wait >/dev/null 2>&1; fi; exit 0"
+  changed_when: false
+
+- name: Push payload
+  ansible.builtin.command:
+    argv:
+      - "{{ raw_node_incus_bin }}"
+      - file
+      - push
+      - "--project={{ raw_node_incus_project }}"
+      - --mode=0700
+      - --uid=0
+      - --gid=0
+      - "{{ raw_node_payload_file }}"
+      - "{{ raw_node_incus_instance }}{{ raw_node_incus_payload_dest }}"
+
+- name: Run payload once
+  ansible.builtin.command:
+    argv:
+      - "{{ raw_node_incus_bin }}"
+      - exec
+      - "{{ raw_node_incus_instance }}"
+      - "--project={{ raw_node_incus_project }}"
+      - --
+      - "{{ raw_node_incus_payload_dest }}"
+  register: raw_node_incus_run
+  failed_when: false
+
+- name: Remove staged payload
+  ansible.builtin.command:
+    argv:
+      - "{{ raw_node_incus_bin }}"
+      - exec
+      - "{{ raw_node_incus_instance }}"
+      - "--project={{ raw_node_incus_project }}"
+      - --
+      - rm
+      - -f
+      - "{{ raw_node_incus_payload_dest }}"
+  changed_when: false
+
+- name: Save payload output with the artifacts
+  ansible.builtin.copy:
+    dest: "{{ raw_node_artifacts_dir }}/incus_exec-run.log"
+    mode: "0600"
+    content: |
+      rc: {{ raw_node_incus_run.rc }}
+      --- stdout ---
+      {{ raw_node_incus_run.stdout }}
+      --- stderr ---
+      {{ raw_node_incus_run.stderr }}
+
+- name: Record transport result
+  ansible.builtin.set_fact:
+    raw_node_transport_result:
+      transport: incus_exec
+      instance: "{{ raw_node_incus_instance }}"
+      project: "{{ raw_node_incus_project }}"
+      created: "{{ not (raw_node_incus_existed | bool) }}"
+      payload_rc: "{{ raw_node_incus_run.rc }}"
+      ipv4: "{{ raw_node_incus_addresses | selectattr('family', 'equalto', 'inet') | map(attribute='address') | list }}"
+      ipv6: "{{ raw_node_incus_addresses | selectattr('family', 'equalto', 'inet6') | map(attribute='address') | list }}"
+  vars:
+    raw_node_incus_addresses: >-
+      {{ (raw_node_incus_state.stdout | from_json
+          | selectattr('name', 'equalto', raw_node_incus_instance) | first).state.network
+         | default({}, true) | dict2items | rejectattr('key', 'equalto', 'lo')
+         | map(attribute='value.addresses') | flatten
+         | selectattr('scope', 'equalto', 'global') | list }}
+
+- name: Fail if payload failed
+  ansible.builtin.fail:
+    msg: >-
+      raw-node-firstboot exited with {{ raw_node_incus_run.rc }} in
+      '{{ raw_node_incus_instance }}'. Output saved to
+      {{ raw_node_artifacts_dir }}/incus_exec-run.log.
+  when: raw_node_incus_run.rc != 0

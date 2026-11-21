@@ -1,0 +1,43 @@
+# roles/raw_node_controller/tasks/resolve_platform.yml
+- name: Assert platform is in the registry
+  ansible.builtin.assert:
+    that:
+      - target_platform is defined
+      - target_platform in raw_node_registry.platforms
+    fail_msg: "Platform '{{ target_platform | default('undefined') }}' is not in the registry."
+
+- name: Resolve platform entry with defaults
+  ansible.builtin.set_fact:
+    raw_node_platform: >-
+      {{ raw_node_platform_defaults
+         | combine(raw_node_registry.platforms[target_platform]) }}
+
+- name: Assert platform is not excluded
+  ansible.builtin.assert:
+    that:
+      - raw_node_platform.status != 'excluded'
+    fail_msg: "Platform '{{ target_platform }}' is excluded: {{ raw_node_platform.notes }}"
+
+- name: Assert transport role exists
+  ansible.builtin.assert:
+    that:
+      - raw_node_platform.transport in raw_node_known_transports
+    fail_msg: >-
+      Transport '{{ raw_node_platform.transport }}' for platform
+      '{{ target_platform }}' has no raw_node_transport_{{ raw_node_platform.transport }}
+      role yet. Write the role and add the name to raw_node_known_transports.
+
+- name: Resolve delivery strategy
+  ansible.builtin.set_fact:
+    raw_node_delivery_strategy: "{{ raw_node_strategy_override | default(raw_node_platform.strategy) }}"
+
+- name: Assert strategy override is valid
+  ansible.builtin.assert:
+    that:
+      - raw_node_delivery_strategy in raw_node_strategies
+    fail_msg: "Strategy '{{ raw_node_delivery_strategy }}' is not one of {{ raw_node_strategies | join(', ') }}."
+
+- name: Warn about unverified platform entry
+  ansible.builtin.debug:
+    msg: "Platform '{{ target_platform }}' has not been validated on its real platform yet."
+  when: raw_node_platform.status == 'unverified'

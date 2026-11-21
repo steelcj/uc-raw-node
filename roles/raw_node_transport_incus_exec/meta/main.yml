@@ -1,0 +1,10 @@
+galaxy_info:
+  role_name: raw_node_transport_incus_exec
+  author: Christopher Steel
+  description: Deliver and run raw-node-firstboot in an Incus instance with incus file push and incus exec.
+  license: Proprietary / Internal Use Only
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+    - name: Ubuntu
+dependencies: []

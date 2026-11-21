@@ -1,0 +1,126 @@
+# roles/raw_node_controller/files/registry.yml
+# Platform-to-strategy mapping for the uc-raw-node controller.
+
+platforms:
+
+  # Cloud and VPS with API and user-data
+
+  hetzner_cloud:
+    strategy: cloud_init
+    transport: hetzner_api
+    datasource: hetzner
+    can_destroy: true
+    reports_address: true
+    vps_modes: [user_data, rescue, custom_iso]
+
+  digitalocean_cloud:
+    strategy: cloud_init
+    transport: do_api
+    datasource: digitalocean
+    can_destroy: true
+    reports_address: true
+    vps_modes: [user_data, custom_iso]
+
+  # Local hypervisors
+
+  incus_vm_cloud:
+    strategy: cloud_init
+    transport: incus
+    datasource: nocloud
+    can_destroy: true
+    reports_address: true
+
+  proxmox_vm:
+    strategy: cloud_init
+    transport: proxmox_api
+    datasource: nocloud
+    can_destroy: true
+    reports_address: true
+
+  # Containers on Incus or LXD
+
+  incus_container_cloud:
+    strategy: cloud_init
+    transport: incus
+    datasource: nocloud
+    can_destroy: true
+    reports_address: true
+    phone_home: optional
+    firewall_clause: check
+    fallback: incus_container_default
+    notes: "For /cloud image variants, which include cloud-init."
+
+  incus_container_default:
+    strategy: adopt
+    transport: incus_exec
+    can_destroy: true
+    reports_address: true
+    phone_home: optional
+    firewall_clause: check
+    notes: "Default image variants lack cloud-init; raw-node-firstboot is pushed and run with incus file push and incus exec. First priority for implementation."
+
+  # VPS without user-data
+
+  vps_ssh_only:
+    strategy: adopt
+    transport: ssh
+    can_destroy: false
+    reports_address: false
+    firewall_clause: check
+    vps_modes: [ssh_only]
+    notes: "Reinstall the provider template from the panel before adopting. Teardown is manual. firewall_clause is check because some SSH-only products are container-based."
+
+  # EX2
+
+  ex2_vps_standard:
+    strategy: adopt
+    transport: ssh
+    can_destroy: false
+    reports_address: false
+    status: excluded
+    notes: "Default cPanel/CloudLinux images are panel-managed and not raw nodes. Reinstall a plain OS template and use ex2_vps_plain."
+
+  ex2_vps_plain:
+    strategy: adopt
+    transport: ssh
+    can_destroy: false
+    reports_address: false
+    firewall_clause: check
+    vps_modes: [ssh_only]
+    notes: "Assumes EX2 offers a plain OS template. To confirm."
+
+  ex2_vps_custom:
+    strategy: cloud_init
+    transport: ex2_api
+    datasource: nocloud
+    can_destroy: true
+    reports_address: true
+    fallback: ex2_vps_plain
+    vps_modes: [user_data]
+    notes: "Assumes a cloud-enabled custom image and an EX2 API that injects user-data and can destroy instances. Datasource and capabilities to confirm."
+
+  # Bare metal and hosted rescue
+
+  metal_ventoy:
+    strategy: installer
+    transport: ventoy_usb
+    can_destroy: false
+    reports_address: false
+    notes: "Controller has no visibility of boot. Phone-home is mandatory."
+
+  rescue_dd:
+    strategy: image
+    transport: rescue_ssh
+    can_destroy: false
+    reports_address: true
+    notes: "Hosted dedicated server or VPS booted into the provider's rescue system. Image deployed with dd, rsync or installimage. The address is known because the controller connects to the rescue system."
+
+  # Air-gapped
+
+  airgap_local_media:
+    strategy: image
+    transport: local_media
+    can_destroy: false
+    reports_address: false
+    phone_home: local
+    notes: "Image deployed from local media with dd, rsync or DRBL. The phone-home report is written to local media for later collection."

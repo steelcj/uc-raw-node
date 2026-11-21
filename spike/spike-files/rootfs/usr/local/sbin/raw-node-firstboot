@@ -1,0 +1,121 @@
+#!/bin/sh
+# raw-node-firstboot: runs once, at the first boot of a raw node.
+#
+# 1. Appends a MAC suffix to the installer hostname: deb13-vt becomes
+#    deb13-vt-a1b2, using the last four hex digits of the MAC address of
+#    the interface that holds the default route.
+# 2. Writes /var/lib/raw-node/confirmation.yml with raw-node-report.
+# 3. Shows the confirmation at the console login prompt.
+#
+# Started by raw-node-firstboot.service, which does not run again once
+# confirmation.yml exists. Delete that file to run it again. When the report
+# cannot be measured, no confirmation.yml is written and the service fails,
+# so it runs again at the next boot.
+#
+# Written without single quotes or backslashes so that it can be embedded
+# in a Debian preseed late_command with printf, one argument per line.
+
+set -u
+set -f
+LC_ALL=C
+export LC_ALL
+
+conf=/etc/raw-node/raw-node.conf
+state_dir=/var/lib/raw-node
+issue_file=/etc/issue.d/50-raw-node.issue
+sysfs="${RAW_NODE_SYSFS:-/sys}"
+
+RAW_NODE_USER=initial
+if [ -r "$conf" ]; then
+    # Written by the answer file at install time.
+    # shellcheck source=/dev/null
+    . "$conf"
+fi
+user="${RAW_NODE_USER:-initial}"
+
+# Print the interface that holds the default route.
+default_dev() {
+    # Word splitting of the ip output is intended.
+    # shellcheck disable=SC2046
+    set -- $(ip "$1" route show default 2>/dev/null)
+    while [ "$#" -gt 1 ]; do
+        if [ "$1" = "dev" ]; then
+            echo "$2"
+            return 0
+        fi
+        shift
+    done
+    return 0
+}
+
+# Wait up to 60 seconds for a default route, so the hostname suffix and the
+# addresses in the report are not taken before DHCP has finished.
+wait_for_route() {
+    tries=0
+    while [ "$tries" -lt 60 ]; do
+        if [ -n "$(ip -4 route show default 2>/dev/null)" ] || [ -n "$(ip -6 route show default 2>/dev/null)" ]; then
+            return 0
+        fi
+        sleep 1
+        tries=$((tries + 1))
+    done
+    return 1
+}
+wait_for_route || echo "raw-node-firstboot: no default route after 60 seconds" >&2
+
+dev="$(default_dev -4)"
+if [ -z "$dev" ]; then
+    dev="$(default_dev -6)"
+fi
+
+suffix=""
+if [ -n "$dev" ] && [ -r "$sysfs/class/net/$dev/address" ]; then
+    hex="$(tr -d : < "$sysfs/class/net/$dev/address")"
+    suffix="${hex#"${hex%????}"}"
+fi
+
+old="$(hostname)"
+case "$old" in
+    *-vt)
+        if [ -n "$suffix" ]; then
+            new="$old-$suffix"
+            hostnamectl set-hostname "$new"
+            if grep -q "$old" /etc/hosts; then
+                sed -i "s/$old/$new/g" /etc/hosts
+            else
+                echo "127.0.1.1 $new" >> /etc/hosts
+            fi
+        fi
+        ;;
+esac
+
+mkdir -p "$state_dir" /etc/issue.d
+# Status 0 or 1: the report was measured, and confirmation.yml is written.
+# Status 2: it could not be measured, for example because there is no SSH
+# host key yet. No confirmation.yml is written, so the service runs again at
+# the next boot, and the console shows why.
+/usr/local/sbin/raw-node-report "$user" > "$state_dir/confirmation.yml.new" 2> "$state_dir/report.err"
+status=$?
+cat "$state_dir/report.err" >&2
+if [ "$status" -le 1 ]; then
+    chmod 0644 "$state_dir/confirmation.yml.new"
+    mv "$state_dir/confirmation.yml.new" "$state_dir/confirmation.yml"
+    {
+        echo "Raw node confirmation:"
+        cat "$state_dir/confirmation.yml"
+        echo
+    } > "$issue_file"
+else
+    rm -f "$state_dir/confirmation.yml.new"
+    {
+        echo "Raw node confirmation could not be written:"
+        cat "$state_dir/report.err"
+        echo "raw-node-firstboot.service runs again at the next boot."
+        echo
+    } > "$issue_file"
+fi
+rm -f "$state_dir/report.err"
+agetty --reload >/dev/null 2>&1 || true
+
+exit "$status"
+

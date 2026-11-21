@@ -1,0 +1,79 @@
+# roles/raw_node_controller/tasks/load_input.yml
+#
+# Loads raw-node-input.yml and checks every contract input field before
+# anything is built. Sets raw_node_input and raw_node_hostname.
+
+- name: "Load contract input {{ raw_node_input_file }}"
+  block:
+    - name: Parse input file
+      ansible.builtin.set_fact:
+        raw_node_input: "{{ lookup('ansible.builtin.file', raw_node_input_file) | from_yaml }}"
+
+    - name: Check input is a mapping
+      ansible.builtin.assert:
+        that:
+          - raw_node_input is mapping
+        quiet: true
+
+  rescue:
+    - name: Report unusable input file
+      ansible.builtin.fail:
+        msg: >-
+          Contract input {{ raw_node_input_file }} could not be loaded or is
+          not a mapping. {{ ansible_failed_result.msg | default('') }}
+
+- name: Check required fields are present
+  ansible.builtin.assert:
+    that:
+      - item in raw_node_input
+      - raw_node_input[item] is string
+      - raw_node_input[item] | length > 0
+    fail_msg: "Contract input field '{{ item }}' is missing, empty or not a string."
+    quiet: true
+  loop: "{{ raw_node_input_required_fields }}"
+
+- name: Check hostname
+  ansible.builtin.assert:
+    that:
+      - raw_node_input.hostname is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+    fail_msg: >-
+      hostname '{{ raw_node_input.hostname }}' must be a single lowercase DNS
+      label: letters, digits and hyphens, 1 to 63 characters, not starting or
+      ending with a hyphen.
+    quiet: true
+
+- name: Check initial username
+  ansible.builtin.assert:
+    that:
+      - raw_node_input.initial_username is match('^[a-z_][a-z0-9_-]{0,31}$')
+      - raw_node_input.initial_username != 'root'
+    fail_msg: "initial_username '{{ raw_node_input.initial_username }}' is not a valid non-root user name."
+    quiet: true
+
+- name: Check password hashes are crypt hashes
+  ansible.builtin.assert:
+    that:
+      - raw_node_input[item] is match('^\$[0-9a-z]+\$.+')
+    fail_msg: "{{ item }} does not look like a crypt hash (for example $y$... or $6$...). Plaintext passwords are not accepted."
+    quiet: true
+  loop:
+    - root_password_hash
+    - initial_password_hash
+
+- name: Check SSH public key
+  ansible.builtin.assert:
+    that:
+      - raw_node_input.ssh_public_key is match('^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/=]+( .*)?$')
+    fail_msg: "ssh_public_key is not a single OpenSSH public key line."
+    quiet: true
+
+- name: Warn about unknown input fields
+  ansible.builtin.debug:
+    msg: "Contract input has fields the controller does not use: {{ raw_node_input_unknown | join(', ') }}"
+  when: raw_node_input_unknown | length > 0
+  vars:
+    raw_node_input_unknown: "{{ raw_node_input.keys() | difference(raw_node_input_required_fields) }}"
+
+- name: Set node hostname
+  ansible.builtin.set_fact:
+    raw_node_hostname: "{{ raw_node_input.hostname }}"

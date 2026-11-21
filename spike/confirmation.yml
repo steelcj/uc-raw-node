@@ -1,0 +1,29 @@
+deb13-ic-dd01:
+  contract: 0.3.0
+  baseline: 0.4.0
+  timestamp: 2026-11-21T01:27:32+00:00
+  machine_id: "a5ba0ec47ad341e98f6d7fecf523af14"
+  user: initial
+  sudo: true
+  sudo_nopasswd: false
+  ssh_port: 22
+  ssh_password_auth: false
+  ssh_host_keys:
+    - type: ecdsa-sha2-nistp256
+      fingerprint: "SHA256:aiSZhtIWZ1kSJGTBRrTUV+fF/agK//1Y8M0pciCp/8o"
+    - type: ssh-ed25519
+      fingerprint: "SHA256:icKO9dvaEgSQnxaNhMRSwNErEdRBOFUeNUitQDnq0AU"
+    - type: ssh-rsa
+      fingerprint: "SHA256:r+b4+6DStEGo8wlT7xA/aiDDnf31XciXU+QmghcX3Es"
+  firewall: foomuuri
+  firewall_active: true
+  python: /usr/bin/python3
+  interfaces:
+    - name: eth0
+      type: other
+      mac: "02:aa:bb:cc:dd:01"
+      state: up
+      default_route4: true
+      default_route6: false
+      ip: [10.119.134.150]
+      ip6: []

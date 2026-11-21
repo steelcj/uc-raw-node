@@ -1,0 +1,2292 @@
+%PDF-1.3
+%ºß¬à
+3 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 4 0 R
+>>
+endobj
+4 0 obj
+<<
+/Length 3945
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F2 24 Tf
+27.5999999999999979 TL
+0 g
+56.6929133858267775 762.5199212598424765 Td
+(Collapse Strategy for a Raw Node) Tj
+T* (Controller) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 683.1498425196850803 Td
+(Version: 0.2.0 ) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 668.9766141732283131 Td
+(Date: 2026-11-20 ) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 654.8033858267716596 Td
+(License: Proprietary / Internal Use Only ) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 640.6301574803148924 Td
+(Author: Christopher Steel ) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 598.1104724409448181 Td
+(Purpose and scope) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 555.5907874015747439 Td
+(uc-raw-node is the raw node controller. Its only job is to produce a node that meets the raw node) Tj
+T* (contract \(the RN-* clauses\) from raw-node-input.yml \(root_password_hash, initial_username,) Tj
+T* (initial_password_hash, ssh_public_key\) and to write confirmation.yml keyed by hostname) Tj
+T* (\(timestamp, ip, ip6, user, sudo\) for the orchestration controller's inventory. Everything after) Tj
+T* (that—discover, verify, onboard, normalize, and customize—belongs to the orchestration controller.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 473.3860629921259147 Td
+(The platform taxonomy maps discovery sources and infrastructure targets, not creation) Tj
+T* (mechanisms. Several entries overlap in how they actually build a node: AWS, GCP, Azure,) Tj
+T* (Proxmox, libvirt, Incus, LXD and most VPS providers all accept cloud-init user-data. PXE, IPMI,) Tj
+T* (USB sticks and custom APIs are delivery channels, not OS-level strategies.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 405.3545669291337958 Td
+(To minimize complexity, the controller collapses the taxonomy into one payload, four delivery) Tj
+T* (strategies and a transport registry, with discovery left to the orchestration controller. Adding a) Tj
+T* (platform should mean adding a registry entry, not changing controller logic.) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 334.4884251968503008 Td
+(The common payload) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 291.9687401574802834 Td
+(Every strategy ends by running the same thing: create the initial user, install the SSH key, set the) Tj
+T* (root password hash, apply the baseline nftables ruleset, and report back. This is packaged once as) Tj
+T* (raw-node-firstboot, the canonical payload. A strategy only answers one question: how does this) Tj
+T* (payload reach the node and get executed exactly once?) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 223.9372440944881646 Td
+(Keeping one payload means the RN-* clauses are implemented in one place and tested once, and) Tj
+T* (the validator can check the same outcome no matter how the node was built. The payload is) Tj
+T* (delivered as either cloud-config user-data, an installer answer file, a baked image manifest, or a) Tj
+T* (raw script pushed over an existing channel. Each strategy handles only the transport layer.) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 138.8978740157479024 Td
+(Delivery strategies and transport registry) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 96.3781889763778281 Td
+(| Strategy | How the payload runs | Typical targets |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 82.2049606299211746 Td
+(|----------|---------------------|-----------------|) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 68.0317322834645211 Td
+(| cloud_init | Rendered as cloud-config user-data, executed by cloud-init on first boot | Cloud, VPS) Tj
+T* (with user-data, Incus/LXD cloud images, Proxmox, libvirt, VMware |) Tj
+ET
+endstream
+endobj
+5 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 6 0 R
+>>
+endobj
+6 0 obj
+<<
+/Length 5209
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 785.1970866141732586 Td
+(| installer | Embedded in an installer answer file \(Preseed, Kickstart, Subiquity autoinstall\) and run) Tj
+T* (as a late command or first-boot unit | Bare metal via uc-ventoy USB or PXE, VPS with custom ISO |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 756.8506299212598378 Td
+(| image | Baked into a disk image or template, triggered by a first-boot unit | Air-gapped,) Tj
+T* (high-throughput, immutable, rescue-mode dd deployments |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 728.5041732283464171 Td
+(| adopt | Pushed over a channel that already exists \(SSH, incus exec, qemu guest agent\) and run) Tj
+T* (once | VPS without user-data, containers without cloud-init, nodes handed over by someone else |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 700.15771653543311 Td
+(| Discovery | Not a creation strategy, handled by the orchestration controller's 00_discover.yml |) Tj
+T* (CMDB, DHCP, ARP, cloud inventory |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 660.4726771653542983 Td
+(The adopt strategy is new in this version. Without it, SSH-only VPS hosts and plain container) Tj
+T* (images get forced into strategies that do not fit them.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 620.7876377952754865 Td
+(Payload format and transport are now strictly separated:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 606.614409448818833 Td
+(• Payload format is decided by the strategy: cloud-config user-data, an answer file, an image) Tj
+T* (manifest, or a bare raw-node-firstboot script.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 578.2679527559055259 Td
+(• Transport is how that format reaches the node: a NoCloud seed \(ISO, VFAT CIDATA volume or) Tj
+T* (local files\), a provider metadata endpoint, a platform API, PXE, a Ventoy USB stick, SSH, or) Tj
+T* (incus exec.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 524.4096850393700606 Td
+(Transport is where platforms actually differ, so it is the pluggable part. Each transport is a small) Tj
+T* (role, and the registry says which strategy and transport a platform uses.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 484.7246456692913057 Td
+(The boundary between installer and cloud_init is deliberately blurred for Ubuntu. Subiquity takes its) Tj
+T* (autoinstall configuration through cloud-init, and in most cases the simplest route is user-data on the) Tj
+T* (NoCloud datasource. uc-ventoy's Ubuntu path is therefore installer strategy with a NoCloud seed) Tj
+T* (transport. This is correct, and should not be "fixed" later by moving it to cloud_init.) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 399.6852755905511003 Td
+(Controller routing flow) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 357.1655905511810261 Td
+(flowchart TD) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 342.9923622047243725 Td
+( A[raw-node-input.yml] --> B{Resolve platform from registry}) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 328.8191338582676053 Td
+( B -->|cloud_init| C[Render user-data]) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 314.6459055118109518 Td
+( B -->|installer| D[Render preseed / ks / autoinstall]) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 300.4726771653542983 Td
+( B -->|image| E[Render image manifest + firstboot unit]) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 286.2994488188975311 Td
+( B -->|adopt| F[Stage raw-node-firstboot]) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 260.7876377952754865 Td
+( C --> G[Deliver via transport]) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 246.614409448818833 Td
+( D --> G) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 232.4411811023621794 Td
+( E --> G) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 218.2679527559054122 Td
+( F --> G) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 192.7561417322833677 Td
+( G --> H{Phone-home received before timeout?}) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 178.5829133858267141 Td
+( H -->|Yes| I[Run raw_node_validator]) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 164.4096850393699469 Td
+( H -->|No| J{Platform can destroy?}) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 138.8978740157479024 Td
+( I --> K{Contract met?}) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 124.7246456692912489 Td
+( K -->|Yes| L[Write confirmation.yml]) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 110.5514173228345953 Td
+( K -->|No| J) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 85.0396062992125508 Td
+( J -->|Yes| M[Destroy, optional fallback attempt]) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 70.8663779527557836 Td
+( J -->|No| N[Mark quarantined and alert]) Tj
+ET
+endstream
+endobj
+7 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 8 0 R
+>>
+endobj
+8 0 obj
+<<
+/Length 5175
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 785.1970866141732586 Td
+( classDef strat fill:#23233a,stroke:#6366f1,color:#818cf8,stroke-width:2px) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 771.0238582677164914 Td
+( classDef proc fill:#1c2b24,stroke:#10b981,color:#34d399,stroke-width:2px) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 756.8506299212598378 Td
+( classDef gate fill:#352b1c,stroke:#f59e0b,color:#fbbf24,stroke-width:2px) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 742.6774015748030706 Td
+( class C,D,E,F strat) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 728.5041732283464171 Td
+( class G,I,L,M,N proc) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 714.3309448818897636 Td
+( class B,H,J,K gate) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 688.819133858267719 Td
+(The first gate is a registry lookup, not capability detection. An optional probe \(for example, checking) Tj
+T* (whether an image ships cloud-init\) can refine the choice, but the registry is the source of truth.) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 632.1262204724408775 Td
+(Platform-to-strategy decision matrix) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 589.6065354330708033 Td
+(| Target platform | Primary strategy | Transport / datasource | Fallback |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 575.4333070866141497 Td
+(| :-- | :-- | :-- | :-- |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 561.2600787401574962 Td
+(| Incus or LXD, /cloud image variants | cloud_init | Incus API, cloud-init.user-data config key | adopt) Tj
+T* (via incus exec |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 532.9136220472440755 Td
+(| Incus or LXD, default image variants | adopt | incus exec, incus file push | cloud_init after) Tj
+T* (switching to a /cloud image |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 504.5671653543306547 Td
+(| Proxmox, libvirt | cloud_init | nocloud seed or configdrive | installer |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 490.3939370078739444 Td
+(| VMware | cloud_init | vmware datasource \(guestinfo\) or ovf | installer |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 476.2207086614172908 Td
+(| AWS, GCP, Azure, Oracle Cloud | cloud_init | Provider metadata endpoint \(ec2, gce, azure,) Tj
+T* (oracle\) | image |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 447.8742519685038701 Td
+(| VPS with API and user-data \(DigitalOcean, Akamai/Linode, Vultr, UpCloud, Hetzner Cloud,) Tj
+T* (Scaleway\) | cloud_init | Provider datasource, see the VPS analysis | installer via rescue or custom) Tj
+T* (ISO |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 405.3545669291337958 Td
+(| VPS with SSH only | adopt | SSH | installer via custom ISO, if offered |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 391.1813385826770855 Td
+(| Bare metal, modern | installer | uc-ventoy USB, PXE | image |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 377.0081102362204319 Td
+(| Bare metal, legacy or air-gapped | image | dd, rsync or DRBl from local media | installer |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 362.8348818897637216 Td
+(| CMDB, DHCP, ARP, cloud inventory | Not a creation target | Orchestration controller) Tj
+T* (00_discover.yml | Not applicable |) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 323.1498425196849666 Td
+(The datasource names above come from cloud-init's list of supported datasources, which includes) Tj
+T* (VMware, OVF, NoCloud, ConfigDrive, LXD and the major clouds and VPS providers. "Shared) Tj
+T* (hosting" is excluded: it does not provide a node.) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 252.2837007874014716 Td
+(Issue analysis) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 209.7640157480313974 Td
+(This section works through specific problems and decides, for each, which strategy and transport) Tj
+T* (handle it and what the controller must do differently. It replaces a generic provider interface: the) Tj
+T* (differences between platforms are captured as decisions here and as data in the registry.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 144.5671653543306547 Td
+(VPS providers) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 110.5514173228345953 Td
+("VPS" covers four quite different situations, and each one maps to a different strategy.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 85.0396062992125508 Td
+(#### API with user-data) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 59.5277952755905062 Td
+(Most mainstream providers accept cloud-init user-data at creation time and expose it through a) Tj
+T* (metadata endpoint. This is the cloud_init strategy with the provider API as transport, and it is the) Tj
+T* (fastest path.) Tj
+ET
+endstream
+endobj
+9 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 10 0 R
+>>
+endobj
+10 0 obj
+<<
+/Length 5237
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 773.8585039370078675 Td
+(Issues to handle:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 759.6852755905511003 Td
+(• Provider defaults compete with the contract. Provider images often create their own default) Tj
+T* (user, place the account's SSH keys on root, set the hostname from the panel, and may ship) Tj
+T* (vendor-data that runs alongside user-data. The payload must assert the contract state explicitly) Tj
+T* (\(user, root hash, key, hostname\) rather than assume a blank image, and the validator must) Tj
+T* (check for unexpected authorized keys.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 688.819133858267719 Td
+(• Hostname is the confirmation key. Because confirmation.yml is keyed by hostname, the) Tj
+T* (controller sets the hostname in user-data and the validator confirms it, rather than trusting the) Tj
+T* (provider's metadata name.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 646.2994488188976447 Td
+(• Provider firewalls are separate. Many providers have their own network firewall. It is outside the) Tj
+T* (RN-* contract, but the controller must make sure it does not block SSH or the phone-home call,) Tj
+T* (otherwise a correct node looks failed.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 603.7797637795274568 Td
+(• Agents. Some images include provider monitoring or guest agents. Their presence is recorded) Tj
+T* (in confirmation.yml notes rather than removed, so the orchestration controller can decide in) Tj
+T* (20_normalize.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 549.9214960629921052 Td
+(#### SSH only) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 524.4096850393700606 Td
+(Budget providers and panel-based hosts often give a root password or key and nothing else. This is) Tj
+T* (the adopt strategy with SSH as transport.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 484.7246456692913057 Td
+(Issues to handle:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 470.5514173228345953 Td
+(• Unknown starting state. The provider template is of unknown provenance. Where the panel) Tj
+T* (allows it, reinstall the template immediately before adopting, so the starting state is at least) Tj
+T* (fresh.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 428.0317322834645211 Td
+(• Credentials the provider knows. The root password was issued by the provider. The payload) Tj
+T* (replaces it with root_password_hash, which the contract already requires.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 399.6852755905511003 Td
+(• Host key trust. The first SSH connection is trust-on-first-use. If the provider shows the host key) Tj
+T* (fingerprint in its console, the controller compares it. Otherwise the risk is recorded in) Tj
+T* (confirmation.yml.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 345.8270078740156919 Td
+(#### Rescue mode or custom ISO) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 320.3151968503935905 Td
+(Some providers let you boot a rescue system or attach your own ISO. Hetzner, for example,) Tj
+T* (provides a Debian-based rescue system with an installimage script that runs unattended when it) Tj
+T* (finds an /autosetup file, and supports custom images. This path supports either the installer) Tj
+T* (strategy \(custom ISO with a NoCloud seed\) or the image strategy \(dd or installimage from rescue\).) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 252.2837007874014716 Td
+(It is slower and needs console or rescue access, but it is the only VPS path where the controller,) Tj
+T* (not the provider, decides what is on the disk. For clients where provenance and the ability to) Tj
+T* (migrate matter, this should be the preferred path even when user-data is available.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 198.4254330708660063 Td
+(#### Container-based VPS) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 172.9136220472439618 Td
+(Some low-cost "VPS" products are actually containers on a shared kernel \(OpenVZ or LXC style\).) Tj
+T* (Kernel modules, and sometimes nftables, may not be available inside them, so the baseline firewall) Tj
+T* (clause may be impossible to meet. The controller should detect this \(through the registry entry, or) Tj
+T* (by checking that nft list ruleset works\) and fail with a clear "contract cannot be met on this platform") Tj
+T* (error rather than produce a node that looks compliant but is not.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 90.7088976377951894 Td
+(#### Choosing among them) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 65.1970866141731449 Td
+(The registry records, per VPS provider, which of these modes it supports. The controller's default) Tj
+T* (order is: rescue or custom ISO when the client's provenance requirements call for it, otherwise) Tj
+T* (user-data, otherwise SSH adoption. Container-based VPS products are rejected unless a contract) Tj
+T* (waiver is defined.) Tj
+ET
+endstream
+endobj
+11 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 12 0 R
+>>
+endobj
+12 0 obj
+<<
+/Length 4275
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 762.5199212598424765 Td
+(Containers on Incus and LXD) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 728.5041732283464171 Td
+(Images from the images: remote come in default and /cloud variants, and only the /cloud variants) Tj
+T* (include cloud-init. Incus VMs also need either a working incus-agent or an extra cloud-init disk for) Tj
+T* (the configuration to reach the guest.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 674.6459055118109518 Td
+(Decisions:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 660.4726771653542983 Td
+(• /cloud variants use cloud_init with the Incus API as transport.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 646.2994488188976447 Td
+(• Default variants use adopt with incus exec and incus file push. The installer fallback listed in) Tj
+T* (earlier drafts is removed, because containers do not run installers.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 617.952992125984224 Td
+(• Address. Incus reports the instance address through its API, so phone-home is optional here,) Tj
+T* (but it is still used so that every strategy produces the same evidence.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 589.6065354330708033 Td
+(• Firewall inside unprivileged containers may be restricted. As with container-based VPS, the) Tj
+T* (registry should record whether the baseline nftables clause applies.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 538.5829133858267141 Td
+(Local hypervisor VMs) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 504.5671653543306547 Td
+(Proxmox, libvirt and Incus VMs all accept a NoCloud seed or config drive, and this is the most) Tj
+T* (predictable cloud_init path. The main issue is cleanup: the seed volume holds credentials \(see) Tj
+T* (credential exposure\) and should be detached after the node passes validation.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 439.3703149606298552 Td
+(Bare metal with uc-ventoy or PXE) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 405.3545669291337958 Td
+(This is the installer strategy. uc-ventoy already renders the answer files on the workstation and) Tj
+T* (stores only its output on the stick. The controller treats uc-ventoy as the transport for this case) Tj
+T* (rather than reimplementing it.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 351.4962992125983874 Td
+(The issues specific to this case are that the controller cannot see the machine boot, does not know) Tj
+T* (its address, and cannot destroy it. Phone-home is therefore mandatory here, and failure handling) Tj
+T* (ends in quarantine, not teardown.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 286.2994488188975311 Td
+(Air-gapped and immutable targets) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 252.2837007874014716 Td
+(This is the image strategy. The payload is baked into the image and triggered by a first-boot unit) Tj
+T* (that removes itself after running. With no network path back to the controller, phone-home writes its) Tj
+T* (report to local media \(or a known path for later collection\), and the validator runs when the) Tj
+T* (orchestration controller can reach the node.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 172.9136220472439618 Td
+(Finding the node) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 138.8978740157479024 Td
+(wait_for_boot in earlier drafts assumed the controller already knew the node's IP. That is true for) Tj
+T* (Incus and cloud APIs, but not for bare metal or SSH-handed-over VPS hosts.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 99.2128346456692043 Td
+(Every strategy now ends the payload with a phone-home call. cloud-init has a phone_home module) Tj
+T* (that posts data, including the SSH host public keys, instance ID and hostname, to a URL after boot.) Tj
+T* (The installer, image and adopt payloads send the same POST themselves. Sending the host keys) Tj
+T* (also solves trust-on-first-use for the validator's SSH connection.) Tj
+ET
+endstream
+endobj
+13 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 14 0 R
+>>
+endobj
+14 0 obj
+<<
+/Length 4736
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 773.8585039370078675 Td
+(The report maps directly onto confirmation.yml. Each attempt includes a one-time token in the) Tj
+T* (payload, so the receiver can reject unexpected reports.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 734.1734645669291695 Td
+(There is one practical issue for VPS targets: a controller on a workstation behind NAT cannot) Tj
+T* (receive a callback from the internet. The options are a small, always-on receiver on a host the client) Tj
+T* (controls, or polling the provider API for the address. The receiver is preferred, since it works the) Tj
+T* (same way for every target.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 654.8033858267716596 Td
+(Failure and teardown) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 620.7876377952754865 Td
+(Earlier drafts said teardown was identical across providers. It is not. The registry carries a) Tj
+T* (can_destroy flag per platform:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 581.1025984251967884 Td
+(• Destroyable \(cloud, VPS with API, Incus, local hypervisors\): destroy the node, keep the logs) Tj
+T* (and the failed artifacts, and optionally make one fallback attempt.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 552.7561417322833677 Td
+(• Not destroyable \(bare metal, SSH-adopted VPS, nodes handed over by someone else\): mark) Tj
+T* (the node as quarantined in a failure record, alert, and never retry automatically.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 513.0711023622046696 Td
+(The error report always names the RN-* clause that failed, not the delivery mechanism.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 476.2207086614172908 Td
+(Fallback selection) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 442.2049606299212314 Td
+(Fallback is chosen in one of two ways, never silently:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 428.0317322834645211 Td
+(• Before delivery, when a probe or registry entry shows the primary strategy cannot work \(for) Tj
+T* (example, an Incus image without cloud-init\). This is automatic and logged.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 399.6852755905511003 Td
+(• After failure, only for destroyable platforms, and only once. On non-destroyable platforms it is a) Tj
+T* (manual decision.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 348.6616535433070112 Td
+(Credential exposure) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 314.6459055118109518 Td
+(The payload carries password hashes and an SSH key, and every transport leaves a copy) Tj
+T* (somewhere:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 286.2994488188975311 Td
+(• Metadata endpoints. On clouds such as AWS, user-data stays readable from inside the) Tj
+T* (instance through the metadata service. Instances should be launched requiring IMDSv2) Tj
+T* (\(token-based requests\). Hashes are acceptable in user-data; plaintext secrets are not.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 243.7797637795274568 Td
+(• Seed media. Detach NoCloud seed volumes and config drives after validation.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 229.6065354330708033 Td
+(• USB and PXE. uc-ventoy output on the stick and PXE answer files should be treated as) Tj
+T* (credentials and removed or rotated after the install batch.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 201.2600787401573825 Td
+(• Payload cleanup. raw-node-firstboot deletes its own staged copy and the phone-home token) Tj
+T* (after running.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 150.2364566929132934 Td
+(Init systems and degraded paths) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 116.220708661417234 Td
+(The validator detects the init system with cat /proc/1/comm \(or readlink /proc/1/exe\) rather than ps) Tj
+T* (-p 1 -o comm=, which fails on BusyBox. Checks are conditional: systemd units and timers are only) Tj
+T* (validated if systemd is PID 1.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 62.3624409448817687 Td
+(When cloud-init is missing and the payload must schedule itself, the degraded paths have) Tj
+T* (preconditions that must be checked rather than assumed: /etc/rc.local on systemd needs) Tj
+T* (rc-local.service, and cron @reboot needs a cron daemon installed and enabled. A systemd oneshot) Tj
+T* (unit that disables itself is preferred wherever systemd is present.) Tj
+ET
+endstream
+endobj
+15 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 16 0 R
+>>
+endobj
+16 0 obj
+<<
+/Length 4405
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 773.8585039370078675 Td
+(For networking, the validator continues to read ip -4 addr, ip -6 addr, ip route and /etc/resolv.conf) Tj
+T* (directly, without assuming a network manager.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 722.8348818897637784 Td
+(Firewall scope) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 688.819133858267719 Td
+(The raw node contract only asks for the baseline nftables ruleset. The controller ensures that) Tj
+T* (baseline is present and that SSH stays reachable. Foomuuri management, and any richer policy,) Tj
+T* (belongs to the orchestration controller's 20_normalize stage. This keeps the raw node layer minimal) Tj
+T* (and avoids a firewall change locking the controller out before confirmation.yml is written.) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 603.7797637795274568 Td
+(Ansible implementation pattern) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 561.2600787401574962 Td
+(A single entry point resolves the platform from the registry, renders the common payload, and) Tj
+T* (hands off to the strategy and transport.) Tj
+ET
+BT
+/F2 24 Tf
+27.5999999999999979 TL
+0 g
+56.6929133858267775 498.8978740157479592 Td
+(roles/raw_node_controller/tasks/main.yml) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 459.2128346456692611 Td
+(• name: Load platform registry) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 445.0396062992125508 Td
+( ansible.builtin.include_vars:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 430.8663779527558404 Td
+( file: registry.yml) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 416.69314960629913 Td
+( name: raw_node_registry) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 391.1813385826770855 Td
+(• name: Resolve platform entry) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 377.0081102362204319 Td
+( ansible.builtin.set_fact:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 362.8348818897637216 Td
+( raw_node_platform: "{{ raw_node_registry.platforms[target_platform] }}") Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 337.323070866141677 Td
+(• name: Resolve delivery strategy) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 323.1498425196849666 Td
+( ansible.builtin.set_fact:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 308.9766141732283131 Td
+( raw_node_delivery_strategy: "{{ raw_node_strategy_override |) Tj
+T* (default\(raw_node_platform.strategy\) }}") Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 269.2915748031495013 Td
+(• name: Assert strategy is known) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 255.1183464566928478 Td
+( ansible.builtin.assert:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 240.9451181102361943 Td
+( that:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 226.7718897637794271 Td
+( - raw_node_delivery_strategy in ['cloud_init', 'installer', 'image', 'adopt']) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 201.2600787401573825 Td
+(• name: Build, deliver and validate) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 187.086850393700729 Td
+( block:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 172.9136220472439618 Td
+( - name: Render raw-node-firstboot payload) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 158.7403937007873083 Td
+( ansible.builtin.include_tasks: payload.yml) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 133.2285826771652637 Td
+( - name: Render strategy artifacts) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 119.0553543307086102 Td
+( ansible.builtin.include_tasks: "{{ raw_node_delivery_strategy }}/artifacts.yml") Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 93.5435433070865656 Td
+( - name: Deliver through transport) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 79.3703149606297984 Td
+( ansible.builtin.include_role:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 65.1970866141731449 Td
+( name: "raw_node_transport_{{ raw_node_platform.transport }}") Tj
+ET
+endstream
+endobj
+17 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 18 0 R
+>>
+endobj
+18 0 obj
+<<
+/Length 4881
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 773.8585039370078675 Td
+( - name: Wait for phone-home report) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 759.6852755905511003 Td
+( ansible.builtin.include_tasks: wait_for_phone_home.yml) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 734.1734645669291695 Td
+( - name: Validate contract) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 720.0002362204724022 Td
+( ansible.builtin.include_role:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 705.8270078740157487 Td
+( name: raw_node_validator) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 680.3151968503937042 Td
+( - name: Write confirmation.yml) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 666.1419685039369369 Td
+( ansible.builtin.include_tasks: write_confirmation.yml) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 640.6301574803148924 Td
+( rescue:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 626.4569291338582389 Td
+( - name: Handle failure by platform capability) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 612.2837007874015853 Td
+( ansible.builtin.include_tasks: failure.yml) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 586.7718897637794271 Td
+(The registry is plain data. Changing a platform's strategy or transport is a one-line edit.) Tj
+ET
+BT
+/F2 24 Tf
+27.5999999999999979 TL
+0 g
+56.6929133858267775 538.5829133858267141 Td
+(roles/raw_node_controller/vars/registry.y) Tj
+T* (ml) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 470.5514173228345953 Td
+(platforms:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 456.378188976377885 Td
+( incus_vm_cloud:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 442.2049606299212314 Td
+( strategy: cloud_init) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 428.0317322834645211 Td
+( transport: incus) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 413.8585039370078107 Td
+( datasource: nocloud) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 399.6852755905511003 Td
+( can_destroy: true) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 385.5120472440944468 Td
+( reports_address: true) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 371.3388188976377364 Td
+( incus_container_default:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 357.1655905511810261 Td
+( strategy: adopt) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 342.9923622047243725 Td
+( transport: incus_exec) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 328.8191338582676053 Td
+( can_destroy: true) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 314.6459055118109518 Td
+( reports_address: true) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 300.4726771653542983 Td
+( firewall_clause: check) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 286.2994488188975311 Td
+( hetzner_cloud:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 272.1262204724408775 Td
+( strategy: cloud_init) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 257.952992125984224 Td
+( transport: hetzner_api) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 243.7797637795274568 Td
+( datasource: hetzner) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 229.6065354330708033 Td
+( can_destroy: true) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 215.4333070866141497 Td
+( reports_address: true) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 201.2600787401573825 Td
+( vps_ssh_only:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 187.086850393700729 Td
+( strategy: adopt) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 172.9136220472439618 Td
+( transport: ssh) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 158.7403937007873083 Td
+( can_destroy: false) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 144.5671653543306547 Td
+( reports_address: false) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 130.3939370078738875 Td
+( metal_ventoy:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 116.220708661417234 Td
+( strategy: installer) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 102.0474803149605805 Td
+( transport: ventoy_usb) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 87.8742519685038133 Td
+( can_destroy: false) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 73.7010236220471597 Td
+( reports_address: false) Tj
+ET
+endstream
+endobj
+19 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 20 0 R
+>>
+endobj
+20 0 obj
+<<
+/Length 4537
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 768.1892125984252289 Td
+(Why this solves the complexity problem) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 725.6695275590550409 Td
+(• One payload: the RN-* clauses are implemented once, in raw-node-firstboot, and validated) Tj
+T* (once.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 697.3230708661417339 Td
+(• Single routing decision: the registry entry for target_platform sets strategy and transport. There) Tj
+T* (are no nested conditionals and no platform-specific playbook forks.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 668.9766141732283131 Td
+(• Differences are data: per-platform behaviour \(can it be destroyed, does it report an address,) Tj
+T* (does the firewall clause apply\) lives in the registry, informed by the issue analysis, not in code.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 640.6301574803148924 Td
+(• Artifact isolation: generation, delivery and verification stay separate. A broken Preseed) Tj
+T* (generator does not break the cloud-init path.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 612.2837007874015853 Td
+(• Discovery decoupled: network, DHCP, ARP and CMDB sources feed the orchestration) Tj
+T* (controller's discovery stage, not this controller.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 583.9372440944881646 Td
+(• Predictable failure: failures name the RN-* clause that failed, and the response \(destroy or) Tj
+T* (quarantine\) follows from the registry, not from improvisation.) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 527.2443307086614368 Td
+(Should IaC shims be a strategy?) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 484.7246456692913057 Td
+(Short answer: no. They should sit outside the controller.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 447.8742519685038701 Td
+(Why IaC as a core strategy clouds the waters) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 413.8585039370078107 Td
+(• Scope: IaC tools manage infrastructure lifecycle, multi-region layouts and drift. uc-raw-node) Tj
+T* (only cares about getting one node to meet the contract. Mixing the two widens the controller's) Tj
+T* (responsibility without adding value to that job.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 371.3388188976377364 Td
+(• Competing state: IaC tools keep authoritative state with plan and apply cycles. The controller) Tj
+T* (keeps only a small attempt record \(which nodes it created, which attempt is in flight\) so it can) Tj
+T* (retry and clean up safely. Two sources of truth for the same node invite conflict.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 328.8191338582676053 Td
+(• Coupling: tying the controller to one IaC ecosystem locks in its language and provider plugins,) Tj
+T* (which works against the goal of infrastructure that can be migrated over time.) Tj
+ET
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+56.6929133858267775 277.7955118110235162 Td
+(Recommended boundary: IaC as an external caller) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 243.7797637795274568 Td
+(IaC stacks call the controller, not the other way round.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 218.2679527559054122 Td
+( [ I a C   s t a c k ]  !’   [ T e r r a f o r m / O p e n T o f u / P u l u m i   m o d u l e ]  !’   [ u c - r a w - n o d e   C L I   o r   r o l e ]  !’   [ p l a t f o r m   A P I   o r) Tj
+T* (transport]) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 178.5829133858267141 Td
+(A thin IaC adapter, packaged separately, can:) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 164.4096850393699469 Td
+(• Read Terraform or OpenTofu outputs, or Pulumi stack references) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 150.2364566929132934 Td
+(• Translate them into raw-node-input.yml and a target_platform key) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 136.0632283464566399 Td
+(• Invoke the controller) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 121.8899999999998727 Td
+(• Return the contents of confirmation.yml, or the failure record, as IaC outputs) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 79.3703149606297984 Td
+(Controller architecture recommendation) Tj
+ET
+endstream
+endobj
+21 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 22 0 R
+>>
+endobj
+22 0 obj
+<<
+/Length 4633
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 773.8585039370078675 Td
+(• Core controller: one payload, four strategies \(cloud_init, installer, image, adopt\), transport) Tj
+T* (roles, and the platform registry. No IaC logic and no discovery inside.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 745.5120472440944468 Td
+(• Platform registry: one entry per platform with strategy, transport, datasource, can_destroy,) Tj
+T* (reports_address and any contract caveats. VPS entries also record which modes \(user-data,) Tj
+T* (SSH only, rescue or custom ISO\) the provider supports.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 702.9923622047243725 Td
+(• Phone-home receiver: a small endpoint on a host the client controls, used by every strategy.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 688.819133858267719 Td
+(• Validation pipeline: universal. Init system detection, baseline firewall and RN-* checks run) Tj
+T* (identically regardless of delivery method.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 660.4726771653542983 Td
+(• IaC adapter \(optional\): a separate package that maps IaC outputs to controller inputs.) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 617.952992125984224 Td
+(Open questions) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 575.4333070866141497 Td
+(• Is adopt the right name, or does bootstrap read better next to the other three?) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 561.2600787401574962 Td
+(• Should post-failure fallback exist at all in the first release, or should every fallback be manual) Tj
+T* (until the strategies are proven?) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 532.9136220472440755 Td
+(• Where does the phone-home receiver live for Vishpala clients: on the client's infrastructure, or) Tj
+T* (on a small shared relay?) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 504.5671653543306547 Td
+(• Should container-based VPS and unprivileged containers get a defined contract waiver for the) Tj
+T* (firewall clause, or be rejected outright?) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 476.2207086614172908 Td
+(• Is the image strategy needed for the first release, or can it wait until an air-gapped client needs) Tj
+T* (it?) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 419.5277952755905062 Td
+(Changes from v0.1.4) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 377.0081102362204319 Td
+(• Added the common raw-node-firstboot payload and the adopt strategy.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 362.8348818897637216 Td
+(• Split payload format from transport, and replaced defaults/detection.yml with a platform) Tj
+T* (registry.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 334.4884251968503008 Td
+(• Replaced the provider-interface idea with an issue analysis covering VPS providers,) Tj
+T* (containers, local VMs, bare metal, air-gapped targets, node location, failure, fallback,) Tj
+T* (credentials, init systems and firewall scope.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 291.9687401574802834 Td
+(• Replaced wait_for_boot with phone-home, and made teardown depend on whether the) Tj
+T* (platform can be destroyed.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 263.6222834645668627 Td
+(• Corrected the VMware datasource, removed shared hosting, and removed the installer fallback) Tj
+T* (for containers.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 235.2758267716534419 Td
+(• Fixed the Ansible snippet \(indentation, registry lookup, failure handling\) and unified the) Tj
+T* (validator name as raw_node_validator.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 206.9293700787401349 Td
+(• Moved Foomuuri management to the orchestration controller.) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+70.8661417322834666 192.7561417322833677 Td
+(• Removed chat residue and paste artifacts, and added references.) Tj
+ET
+BT
+/F2 18 Tf
+20.6999999999999993 TL
+0 g
+56.6929133858267775 150.2364566929132934 Td
+(References) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 107.7167716535432191 Td
+(Amazon Web Services. \(n.d.\). Modify instance metadata options for existing instances. Amazon) Tj
+T* (Elastic Compute Cloud User Guide.) Tj
+T* (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-IMDS-existing-instances.html) Tj
+ET
+endstream
+endobj
+23 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 24 0 R
+>>
+endobj
+24 0 obj
+<<
+/Length 1213
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 785.1970866141732586 Td
+(Canonical. \(n.d.-a\). Automated server installs. Ubuntu Discourse.) Tj
+T* (https://discourse.ubuntu.com/t/automated-server-installs/16612) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 745.5120472440944468 Td
+(Canonical. \(n.d.-b\). Datasources. cloud-init documentation.) Tj
+T* (https://docs.cloud-init.io/en/latest/reference/datasources.html) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 705.8270078740157487 Td
+(Canonical. \(n.d.-c\). Phone home: Post data to remote host. cloud-init documentation.) Tj
+T* (https://docs.cloud-init.io/en/24.4/reference/yaml_examples/phone_home.html) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 666.1419685039369369 Td
+(Hetzner Online. \(2020, May 18\). Installimage. Hetzner Docs.) Tj
+T* (https://docs.hetzner.com/robot/dedicated-server/operating-systems/installimage/) Tj
+ET
+BT
+/F1 11 Tf
+12.6499999999999986 TL
+0 g
+56.6929133858267775 626.4569291338582389 Td
+(Linux Containers. \(n.d.\). How to use cloud-init. Incus documentation.) Tj
+T* (https://linuxcontainers.org/incus/docs/main/cloud-init/) Tj
+ET
+endstream
+endobj
+1 0 obj
+<</Type /Pages
+/Kids [3 0 R 5 0 R 7 0 R 9 0 R 11 0 R 13 0 R 15 0 R 17 0 R 19 0 R 21 0 R 23 0 R ]
+/Count 11
+>>
+endobj
+25 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+26 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+27 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+28 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+29 0 obj
+<<
+/Type /Font
+/BaseFont /Courier
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+30 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+31 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+32 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+33 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Roman
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+34 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+35 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Italic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+36 0 obj
+<<
+/Type /Font
+/BaseFont /Times-BoldItalic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+37 0 obj
+<<
+/Type /Font
+/BaseFont /ZapfDingbats
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+38 0 obj
+<<
+/Type /Font
+/BaseFont /Symbol
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+2 0 obj
+<<
+/ProcSet [/PDF /Text /ImageB /ImageC /ImageI]
+/Font <<
+/F1 25 0 R
+/F2 26 0 R
+/F3 27 0 R
+/F4 28 0 R
+/F5 29 0 R
+/F6 30 0 R
+/F7 31 0 R
+/F8 32 0 R
+/F9 33 0 R
+/F10 34 0 R
+/F11 35 0 R
+/F12 36 0 R
+/F13 37 0 R
+/F14 38 0 R
+>>
+/XObject <<
+>>
+>>
+endobj
+39 0 obj
+<<
+/Producer (jsPDF 4.2.1)
+/CreationDate (D:20261120213100-05'00')
+>>
+endobj
+40 0 obj
+<<
+/Type /Catalog
+/Pages 1 0 R
+/OpenAction [3 0 R /FitH null]
+/PageLayout /OneColumn
+>>
+endobj
+xref
+0 41
+0000000000 65535 f 
+0000050363 00000 n 
+0000052253 00000 n 
+0000000015 00000 n 
+0000000152 00000 n 
+0000004149 00000 n 
+0000004286 00000 n 
+0000009547 00000 n 
+0000009684 00000 n 
+0000014911 00000 n 
+0000015049 00000 n 
+0000020339 00000 n 
+0000020478 00000 n 
+0000024806 00000 n 
+0000024945 00000 n 
+0000029734 00000 n 
+0000029873 00000 n 
+0000034331 00000 n 
+0000034470 00000 n 
+0000039404 00000 n 
+0000039543 00000 n 
+0000044133 00000 n 
+0000044272 00000 n 
+0000048958 00000 n 
+0000049097 00000 n 
+0000050488 00000 n 
+0000050614 00000 n 
+0000050745 00000 n 
+0000050879 00000 n 
+0000051017 00000 n 
+0000051141 00000 n 
+0000051270 00000 n 
+0000051402 00000 n 
+0000051538 00000 n 
+0000051666 00000 n 
+0000051793 00000 n 
+0000051922 00000 n 
+0000052055 00000 n 
+0000052157 00000 n 
+0000052506 00000 n 
+0000052592 00000 n 
+trailer
+<<
+/Size 41
+/Root 40 0 R
+/Info 39 0 R
+/ID [ <6624C755E8AD0DA8295B421F0DB115BF> <6624C755E8AD0DA8295B421F0DB115BF> ]
+>>
+startxref
+52696
+%%EOF

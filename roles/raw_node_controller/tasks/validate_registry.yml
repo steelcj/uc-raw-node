@@ -1,0 +1,45 @@
+# roles/raw_node_controller/tasks/validate_registry.yml
+- name: Load registry layers in order
+  ansible.builtin.include_tasks: load_registry_layer.yml
+  loop: "{{ raw_node_registry_files }}"
+  loop_control:
+    loop_var: raw_node_registry_file
+
+- name: Check every registry entry
+  ansible.builtin.assert:
+    that:
+      - entry is mapping
+      - entry.strategy is defined and entry.strategy in raw_node_strategies
+      - entry.transport is defined and entry.transport is string
+      - entry.can_destroy is defined and entry.can_destroy is boolean
+      - entry.reports_address is defined and entry.reports_address is boolean
+      - entry.strategy != 'cloud_init' or (entry.datasource | default(none)) is not none
+      - (entry.phone_home | default('required')) in ['required', 'optional', 'local']
+      - (entry.firewall_clause | default('applies')) in ['applies', 'check', 'waived']
+      - (entry.status | default('unverified')) in ['active', 'unverified', 'excluded']
+    fail_msg: "Registry entry '{{ item.key }}' is missing a required field or has a value outside its allowed set."
+    quiet: true
+  loop: "{{ raw_node_registry.platforms | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    entry: "{{ item.value }}"
+
+- name: Check every fallback is a single safe hop
+  ansible.builtin.assert:
+    that:
+      - item.value.fallback in raw_node_registry.platforms
+      - item.value.fallback != item.key
+      - (raw_node_registry.platforms[item.value.fallback].status | default('unverified')) != 'excluded'
+      - (raw_node_registry.platforms[item.value.fallback].fallback | default(none)) is none
+    fail_msg: >-
+      Fallback for '{{ item.key }}' must point to another existing,
+      non-excluded entry that has no fallback of its own.
+    quiet: true
+  loop: >-
+    {{ raw_node_registry.platforms | dict2items
+       | selectattr('value.fallback', 'defined')
+       | rejectattr('value.fallback', 'none')
+       | list }}
+  loop_control:
+    label: "{{ item.key }}"

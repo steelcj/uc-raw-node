@@ -1,0 +1,31 @@
+# roles/raw_node_transport_incus_exec/defaults/main.yml
+
+# Instance name. raw_node_hostname is set by the controller from the
+# hostname field of raw-node-input.yml.
+raw_node_incus_instance: "{{ raw_node_hostname }}"
+
+# Image used when the instance does not exist yet. A default (non-/cloud)
+# variant, because this transport is for images without cloud-init.
+raw_node_incus_image: "images:debian/13"
+
+raw_node_incus_project: default
+raw_node_incus_profiles:
+  - default
+
+# Create the instance if it does not exist. If it already exists, the role
+# refuses to touch it unless raw_node_incus_allow_existing is true, so an
+# unrelated container is never adopted by accident.
+raw_node_incus_create: true
+raw_node_incus_allow_existing: false
+
+# Seconds to wait for the instance to be running with a global address.
+raw_node_incus_wait_timeout: 120
+
+# The payload rendered by the controller's payload.yml.
+raw_node_payload_file: "{{ raw_node_artifacts_dir }}/raw-node-firstboot"
+
+# Where the payload is placed inside the instance before it runs.
+raw_node_incus_payload_dest: /root/raw-node-firstboot
+
+# Name of the incus binary, so tests can substitute a stand-in.
+raw_node_incus_bin: incus
