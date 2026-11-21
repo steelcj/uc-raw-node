@@ -18,8 +18,10 @@ The controller pipeline is in place: `build.yml` runs end to end, with the attem
 | Output paths, secrets checks (`prepare_paths.yml`) and attempt record | Done, tested |
 | `raw_node_transport_incus_exec`, with ownership marker, `address.yml` and `destroy.yml` | Done, tested with a stand-in Incus client and on a real Incus host (Debian 13 container) |
 | Address report (`wait_phone_home.yml`, transport source) | Done, tested |
-| Confirmation and failure handling | Done, tested with a stand-in Incus client and on a real Incus host |
+| Confirmation and failure handling, including the `aborted` state from the generic `raw_node_transport_state` | Done, tested with a stand-in Incus client and on a real Incus host |
+| Attempt history and the refusal to start while a node may exist (`write_attempt.yml`) | Done, tested with a stand-in Incus client and on a real Incus host |
 | Standalone teardown (`destroy.yml`) | Done, tested with a stand-in Incus client and on a real Incus host |
+| Variable and secret-handling check, `tools/check.sh` and git hooks | Done |
 | `payload.yml` (renders `raw-node-firstboot`) | Placeholder: fails "not implemented yet" |
 | `raw_node_validator` | Placeholder: fails "not implemented yet" |
 | Phone-home receiver | Not started |
@@ -183,6 +185,21 @@ This sets git's `core.hooksPath` to `tools/git-hooks`, so it works the same with
 | `~/.secrets/uc-raw-node/<hostname>/` | `raw_node_secrets_path` | Rendered payload and phone-home token, deleted after use |
 
 Each setting can be overridden with `-e`. Records and reports hold public data only. Logs hold the transport's and the payload's output, which the payload's output rules keep free of contract values.
+
+### Attempt states
+
+`records/<hostname>/attempt.yml` holds the current attempt's `state`:
+
+| State | Meaning |
+| :-- | :-- |
+| `in_progress` | The build has started |
+| `confirmed` | The node passed validation and `confirmation.yml` is written |
+| `failed` | Failure handling has started; a record left in this state means it did not finish |
+| `aborted` | The build failed before the transport created anything, so there was nothing to tear down and no alert |
+| `destroyed` | A node existed and was torn down, by failure handling or `destroy.yml` |
+| `quarantined` | A node exists in an unknown state and was left for the operator, with an alert: the teardown failed, the platform cannot destroy, or the run adopted an existing instance |
+
+Failure handling chooses between `aborted`, `quarantined` and `destroyed` from `raw_node_transport_state`, which every transport sets: `none` (nothing created), `adopted` (an existing instance was used) or `created`. A node may still exist in `confirmed`, `quarantined`, `in_progress` and `failed`, so a new build for that hostname refuses to start in those states (see below).
 
 ### Operational notes
 
