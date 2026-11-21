@@ -1,4 +1,4 @@
-# roles/raw_node_controller/files/registry.yml
+# registry/base.yml
 # Platform-to-strategy mapping for the uc-raw-node controller.
 
 platforms:

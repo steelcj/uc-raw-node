@@ -1,0 +1,163 @@
+---
+# tests/prepare_paths.yml
+#
+# Runs the steps up to write_attempt.yml (registry, input, platform,
+# prepare_paths.yml, write_attempt.yml) once per case, and checks that each
+# case continues or stops as expected. Run from the repository root:
+#
+#   ansible-playbook -i localhost, -c local tests/prepare_paths.yml
+#
+# Every case works under artifacts/prepare-paths-test/. A throwaway git
+# repository is created there and used as the repository root
+# (raw_node_root), so a directory beside it counts as outside the repository
+# while still being under artifacts/. The no-checkout case uses a temporary
+# directory from the tempfile module. Everything is removed at the end.
+
+- name: Test prepare_paths.yml and write_attempt.yml
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/defaults.yml
+    - vars/output.yml
+
+  vars:
+    target_platform: incus_container_default
+    raw_node_input_file: "{{ playbook_dir }}/fixtures/raw-node-input.yml"
+    raw_node_test_dir: "{{ playbook_dir }}/../artifacts/prepare-paths-test"
+    raw_node_test_repo: "{{ raw_node_test_dir }}/repo"
+    raw_node_test_outside: "{{ raw_node_test_dir }}/outside"
+
+  tasks:
+    - name: Validate registry
+      ansible.builtin.include_tasks: ../tasks/validate_registry.yml
+
+    - name: Load and check contract input
+      ansible.builtin.include_tasks: ../tasks/load_input.yml
+
+    - name: Resolve platform
+      ansible.builtin.include_tasks: ../tasks/resolve_platform.yml
+
+    - name: Run the cases
+      block:
+        - name: Start from an empty test directory
+          ansible.builtin.file:
+            path: "{{ raw_node_test_dir }}"
+            state: absent
+
+        - name: Create the test directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0700"
+          loop:
+            - "{{ raw_node_test_repo }}"
+            - "{{ raw_node_test_outside }}"
+            - "{{ raw_node_test_outside }}/loose/secrets"
+            - "{{ raw_node_test_outside }}/loose-node/secrets/{{ raw_node_hostname }}"
+
+        - name: Loosen the permissions for the permission cases
+          ansible.builtin.file:
+            path: "{{ item }}"
+            mode: "0755"
+          loop:
+            - "{{ raw_node_test_outside }}/loose/secrets"
+            - "{{ raw_node_test_outside }}/loose-node/secrets/{{ raw_node_hostname }}"
+
+        - name: Create the throwaway repository
+          ansible.builtin.command:
+            argv: [git, init, -q, "{{ raw_node_test_repo }}"]
+            creates: "{{ raw_node_test_repo }}/.git"
+
+        - name: Ignore one directory in the throwaway repository
+          ansible.builtin.copy:
+            dest: "{{ raw_node_test_repo }}/.gitignore"
+            content: "ignored/\n"
+            mode: "0644"
+
+        - name: Link from outside into the throwaway repository
+          ansible.builtin.file:
+            src: "{{ raw_node_test_repo }}"
+            dest: "{{ raw_node_test_outside }}/link"
+            state: link
+
+        - name: Create a directory outside any git checkout
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: uc-raw-node-test-
+          register: raw_node_test_nogit
+
+        - name: Run each case
+          ansible.builtin.include_tasks: tasks/prepare_paths_case.yml
+          loop: "{{ raw_node_test_cases }}"
+          loop_control:
+            loop_var: raw_node_test_case
+            label: "{{ raw_node_test_case.name }}"
+          vars:
+            raw_node_test_cases:
+              - name: outside the repository
+                root: "{{ raw_node_test_repo }}"
+                base: "{{ raw_node_test_outside }}/outside"
+                secrets: "{{ raw_node_test_outside }}/outside/secrets/uc-raw-node"
+                expect: continue
+              - name: inside the repository and not ignored
+                root: "{{ raw_node_test_repo }}"
+                base: "{{ raw_node_test_outside }}/not-ignored"
+                secrets: "{{ raw_node_test_repo }}/secrets"
+                expect: stop
+              - name: relative path inside the repository and not ignored
+                root: "{{ raw_node_test_repo }}"
+                base: "{{ raw_node_test_outside }}/relative"
+                secrets: secrets
+                expect: stop
+              - name: inside the repository and ignored, other outputs inside and not ignored
+                root: "{{ raw_node_test_repo }}"
+                base: "{{ raw_node_test_repo }}/outputs"
+                secrets: "{{ raw_node_test_repo }}/ignored/secrets"
+                expect: continue
+              - name: symbolic link from outside into the repository
+                root: "{{ raw_node_test_repo }}"
+                base: "{{ raw_node_test_outside }}/symlink"
+                secrets: "{{ raw_node_test_outside }}/link/secrets"
+                expect: stop
+              - name: existing secrets path with mode 0755
+                root: "{{ raw_node_test_repo }}"
+                base: "{{ raw_node_test_outside }}/loose"
+                secrets: "{{ raw_node_test_outside }}/loose/secrets"
+                expect: stop
+              - name: existing node secrets directory with mode 0755
+                root: "{{ raw_node_test_repo }}"
+                base: "{{ raw_node_test_outside }}/loose-node"
+                secrets: "{{ raw_node_test_outside }}/loose-node/secrets"
+                expect: stop
+              - name: not a git checkout
+                root: "{{ raw_node_test_nogit.path }}"
+                base: "{{ raw_node_test_nogit.path }}"
+                secrets: "{{ raw_node_test_nogit.path }}/secrets/uc-raw-node"
+                expect: continue
+
+        - name: Check nothing was created through the symbolic link or in the repository
+          ansible.builtin.stat:
+            path: "{{ raw_node_test_repo }}/secrets"
+          register: raw_node_test_repo_secrets
+
+        - name: Assert the stopped cases left the repository untouched
+          ansible.builtin.assert:
+            that:
+              - not raw_node_test_repo_secrets.stat.exists
+            fail_msg: A stopped case created the secrets path inside the repository.
+            quiet: true
+
+        - name: Show the case results
+          ansible.builtin.debug:
+            msg: "{{ raw_node_test_results }}"
+
+      always:
+        - name: Remove the test directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ raw_node_test_dir }}"
+            - "{{ raw_node_test_nogit.path | default(raw_node_test_dir) }}"

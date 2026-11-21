@@ -1,0 +1,7 @@
+galaxy_info:
+  role_name: raw_node_validator
+  author: Christopher Steel
+  description: Check the RN-* clauses of the raw node contract on a built node (placeholder).
+  license: Proprietary / Internal Use Only
+  min_ansible_version: "2.15"
+dependencies: []

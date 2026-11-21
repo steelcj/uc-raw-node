@@ -1,0 +1,10 @@
+#!/bin/sh
+# Stand-in payload that fails, for the pipeline's failure path. It carries
+# the fixture's contract values like the real payload, and prints a marker
+# that must reach the run log but never the failure record.
+ROOT_PASSWORD_HASH='$6$rntest$MnCGs5p2Bwt0Iy6.2Y8yXyhhyO4b3eAmmyb9cQ6f7G6s3x0tLhb3xYk8Q0lX7m6gk3o9rvT0iPZVq0bYHk7vB/'
+SSH_PUBLIC_KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTestsOnly0000000000000000000000000 test@uc-raw-node'
+: "$ROOT_PASSWORD_HASH" "$SSH_PUBLIC_KEY"
+echo "STAND-IN-PAYLOAD-OUTPUT step=create_user"
+echo "raw-node-firstboot stand-in failing on purpose" >&2
+exit 3

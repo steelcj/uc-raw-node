@@ -1,0 +1,87 @@
+---
+# tests/build_scenarios.yml
+#
+# Runs tests/build.yml once per scenario, each as its own ansible-playbook
+# run (several of them must fail), and checks the records, reports, logs
+# and secrets each one leaves under artifacts/. After every scenario, greps
+# the controller's output directories and the run's console output for the
+# fixture's password hash and SSH key. Run from the repository root.
+#
+# With the stand-in Incus client (the default):
+#   ansible-playbook -i localhost, -c local tests/build_scenarios.yml
+#
+# Against real Incus, in a dedicated project; teardown_failure is skipped,
+# since only the stand-in client can be made to fail on delete:
+#   ansible-playbook -i localhost, -c local tests/build_scenarios.yml \
+#     -e raw_node_test_stand_in=false -e raw_node_incus_project=uc-raw-node-test
+
+- name: Run the build scenarios
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/defaults.yml
+    - vars/output.yml
+
+  vars:
+    raw_node_test_stand_in: true
+    raw_node_test_hostname: rn-test-incus-exec
+    raw_node_test_project: "{{ raw_node_incus_project | default('default') }}"
+    raw_node_test_extra_args: >-
+      {{ (['-e', 'raw_node_incus_project=' ~ raw_node_incus_project] if raw_node_incus_project is defined else [])
+         + (['-e', 'raw_node_incus_image=' ~ raw_node_incus_image] if raw_node_incus_image is defined else []) }}
+    raw_node_test_path: >-
+      {{ ((playbook_dir ~ '/bin:') if raw_node_test_stand_in | bool else '')
+         ~ (ansible_playbook_python | dirname) ~ ':' ~ lookup('ansible.builtin.env', 'PATH') }}
+    raw_node_test_secret_pattern: "MnCGs5p2Bwt0Iy6|FakeKeyForTestsOnly"
+    raw_node_test_scenarios: >-
+      {{ ['success', 'payload_failure']
+         + (['teardown_failure'] if raw_node_test_stand_in | bool else [])
+         + ['placeholders'] }}
+
+  tasks:
+    - name: Expand the test output paths
+      ansible.builtin.set_fact:
+        raw_node_test_records: "{{ raw_node_records_path }}/{{ raw_node_test_hostname }}"
+        raw_node_test_reports: "{{ raw_node_reports_path }}/{{ raw_node_test_hostname }}"
+        raw_node_test_logs: "{{ raw_node_logs_path }}/{{ raw_node_test_hostname }}"
+        raw_node_test_secrets: "{{ raw_node_secrets_path }}/{{ raw_node_test_hostname }}"
+        raw_node_test_results: []
+
+    - name: Start the stand-in client from an empty state
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../artifacts/{{ item }}"
+        state: absent
+      loop:
+        - fake-incus.json
+        - fake-incus.json.fail-delete
+      when: raw_node_test_stand_in | bool
+
+    - name: Look for a leftover test instance
+      ansible.builtin.command:
+        argv: [incus, list, "--project={{ raw_node_test_project }}", --format=json]
+      environment:
+        PATH: "{{ raw_node_test_path }}"
+      register: raw_node_test_leftover
+      changed_when: false
+
+    - name: Stop if the test instance already exists
+      ansible.builtin.assert:
+        that:
+          - raw_node_test_leftover.stdout | from_json | selectattr('name', 'equalto', raw_node_test_hostname) | list | length == 0
+        fail_msg: >-
+          Instance {{ raw_node_test_hostname }} already exists in project
+          {{ raw_node_test_project }}. Destroy it first (destroy.yml
+          -e hostname={{ raw_node_test_hostname }}) so the scenarios start clean.
+        quiet: true
+
+    - name: Run each scenario
+      ansible.builtin.include_tasks: tasks/build_scenario.yml
+      loop: "{{ raw_node_test_scenarios }}"
+      loop_control:
+        loop_var: raw_node_test_scenario
+
+    - name: Show the scenario results
+      ansible.builtin.debug:
+        msg: "{{ raw_node_test_results }}"

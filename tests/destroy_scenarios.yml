@@ -1,0 +1,189 @@
+---
+# tests/destroy_scenarios.yml
+#
+# Builds a node with tests/build.yml and destroys it with tests/destroy.yml
+# (destroy.yml with the outputs under artifacts/), each as its own
+# ansible-playbook run. Cases:
+#   - destroy with the attempt record
+#   - destroy with the attempt record removed and -e target_platform
+#   - destroy with neither, which must stop with a clear message
+#   - destroy an instance the controller did not create, which must refuse
+# Run from the repository root.
+#
+# With the stand-in Incus client (the default):
+#   ansible-playbook -i localhost, -c local tests/destroy_scenarios.yml
+#
+# Against real Incus, in a dedicated project:
+#   ansible-playbook -i localhost, -c local tests/destroy_scenarios.yml \
+#     -e raw_node_test_stand_in=false -e raw_node_incus_project=uc-raw-node-test
+
+- name: Run the destroy scenarios
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/defaults.yml
+    - vars/output.yml
+
+  vars:
+    raw_node_test_stand_in: true
+    raw_node_test_hostname: rn-test-incus-exec
+    raw_node_test_project: "{{ raw_node_incus_project | default('default') }}"
+    raw_node_test_image: "{{ raw_node_incus_image | default('images:debian/13') }}"
+    raw_node_test_extra_args: >-
+      {{ (['-e', 'raw_node_incus_project=' ~ raw_node_incus_project] if raw_node_incus_project is defined else [])
+         + (['-e', 'raw_node_incus_image=' ~ raw_node_incus_image] if raw_node_incus_image is defined else []) }}
+    raw_node_test_path: >-
+      {{ ((playbook_dir ~ '/bin:') if raw_node_test_stand_in | bool else '')
+         ~ (ansible_playbook_python | dirname) ~ ':' ~ lookup('ansible.builtin.env', 'PATH') }}
+    raw_node_test_records: "{{ raw_node_records_path }}/{{ raw_node_test_hostname }}"
+
+  tasks:
+    - name: Start the stand-in client from an empty state
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../artifacts/{{ item }}"
+        state: absent
+      loop:
+        - fake-incus.json
+        - fake-incus.json.fail-delete
+      when: raw_node_test_stand_in | bool
+
+    - name: Start from empty records
+      ansible.builtin.file:
+        path: "{{ raw_node_test_records }}"
+        state: absent
+
+    - name: Run the cases
+      block:
+        # Case 1: build, then destroy with the attempt record
+
+        - name: Build a node
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=success]
+
+        - name: Check the node was built
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_run.rc == 0
+              - raw_node_test_exists | bool
+              - raw_node_test_marker == 'true'
+              - raw_node_test_attempt.state == 'confirmed'
+            fail_msg: "Build failed: {{ raw_node_test_console[-1500:] }}"
+            quiet: true
+
+        - name: Destroy the node by hostname
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: destroy.yml
+            raw_node_test_args: [-e, "hostname={{ raw_node_test_hostname }}"]
+
+        - name: Look for the records after teardown
+          ansible.builtin.stat:
+            path: "{{ raw_node_test_records }}/confirmation.yml"
+          register: raw_node_test_confirmation
+
+        - name: Check the destroy with the attempt record
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_run.rc == 0
+              - not (raw_node_test_exists | bool)
+              - raw_node_test_attempt.state == 'destroyed'
+              - raw_node_test_attempt.started is defined
+              - raw_node_test_confirmation.stat.exists
+            fail_msg: "Destroy with record failed: {{ raw_node_test_console[-1500:] }}"
+            quiet: true
+
+        # Case 2: build, remove the attempt record, destroy with -e target_platform
+
+        - name: Build a second node
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: build.yml
+            raw_node_test_args: [-e, raw_node_test_scenario=success]
+
+        - name: Remove the attempt record
+          ansible.builtin.file:
+            path: "{{ raw_node_test_records }}/attempt.yml"
+            state: absent
+
+        - name: Destroy the node by hostname and platform
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: destroy.yml
+            raw_node_test_args: [-e, "hostname={{ raw_node_test_hostname }}", -e, target_platform=incus_container_default]
+
+        - name: Check the destroy with -e target_platform
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_run.rc == 0
+              - not (raw_node_test_exists | bool)
+              - raw_node_test_attempt.state == 'destroyed'
+              - raw_node_test_attempt.target_platform == 'incus_container_default'
+            fail_msg: "Destroy with -e target_platform failed: {{ raw_node_test_console[-1500:] }}"
+            quiet: true
+
+        # Case 3: neither the attempt record nor -e target_platform
+
+        - name: Remove the attempt record again
+          ansible.builtin.file:
+            path: "{{ raw_node_test_records }}/attempt.yml"
+            state: absent
+
+        - name: Destroy with neither the record nor the platform
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: destroy.yml
+            raw_node_test_args: [-e, "hostname={{ raw_node_test_hostname }}"]
+
+        - name: Check the destroy stopped with a clear message
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_run.rc != 0
+              - raw_node_test_console is search('No attempt record for ' ~ raw_node_test_hostname)
+              - raw_node_test_console is search('-e target_platform=')
+            fail_msg: "Destroy without platform: {{ raw_node_test_console[-1500:] }}"
+            quiet: true
+
+        # Case 4: an instance the controller did not create
+
+        - name: Launch a plain instance under the node's hostname
+          ansible.builtin.command:
+            argv:
+              - incus
+              - launch
+              - "{{ raw_node_test_image }}"
+              - "{{ raw_node_test_hostname }}"
+              - "--project={{ raw_node_test_project }}"
+          environment:
+            PATH: "{{ raw_node_test_path }}"
+          register: raw_node_test_plain_launch
+          changed_when: true
+
+        - name: Destroy the plain instance
+          ansible.builtin.include_tasks: tasks/run_playbook.yml
+          vars:
+            raw_node_test_playbook: destroy.yml
+            raw_node_test_args: [-e, "hostname={{ raw_node_test_hostname }}", -e, target_platform=incus_container_default]
+
+        - name: Check the destroy refused
+          ansible.builtin.assert:
+            that:
+              - raw_node_test_run.rc != 0
+              - raw_node_test_console is search('does not carry the uc-raw-node\s+ownership marker')
+              - raw_node_test_exists | bool
+              - raw_node_test_marker == ''
+            fail_msg: "Destroy of a plain instance: {{ raw_node_test_console[-1500:] }}"
+            quiet: true
+
+      always:
+        - name: Delete the plain instance by hand
+          ansible.builtin.command:
+            argv: [incus, delete, --force, "--project={{ raw_node_test_project }}", "{{ raw_node_test_hostname }}"]
+          environment:
+            PATH: "{{ raw_node_test_path }}"
+            FAKE_INCUS_ALLOW_UNMARKED_DELETE: "1"
+          when: raw_node_test_plain_launch is defined and raw_node_test_plain_launch is succeeded
+          changed_when: true

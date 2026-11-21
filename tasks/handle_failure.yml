@@ -1,0 +1,137 @@
+# tasks/handle_failure.yml
+#
+# Runs in the rescue section of build.yml. Never leaves the operator without
+# a record, even when the cleanup itself fails. In order:
+#
+#   1. Write records/<hostname>/failure.yml (attempt, registry entry, failed
+#      task, reason, RN-* clause where known, action about to be taken) and
+#      set the attempt state to failed. ansible_failed_result is never
+#      copied whole: the reason is raw_node_failure_reason when a step set
+#      it (a no_log task's result is masked), and otherwise the module's
+#      message and return code.
+#   2. Destroy or quarantine. If can_destroy is true, the transport's
+#      tasks/destroy.yml runs in its own block; success sets the state to
+#      destroyed, failure adds the teardown error to the record and sets the
+#      state to quarantined. The teardown error keeps the platform's own
+#      error text (standard error, trimmed): teardown commands carry no
+#      payload or contract values. If can_destroy is false, the state is set to
+#      quarantined and an alert is shown.
+#   3. Delete the node's secrets, whatever happened in step 2.
+#   4. Fail with the original failure, pointing to the record.
+
+- name: Capture the original failure
+  ansible.builtin.set_fact:
+    raw_node_failure_task: "{{ ansible_failed_task.name | default('unknown task') }}"
+    raw_node_failure_no_report: "{{ (raw_node_report_status | default('')) == 'no_report' }}"
+    raw_node_failure_detail: >-
+      {{ raw_node_failure_reason
+         if (raw_node_failure_reason | default('') | length > 0)
+         else ((ansible_failed_result.msg | default('no message') | string | truncate(500))
+               ~ ((' (return code ' ~ ansible_failed_result.rc ~ ')')
+                  if ansible_failed_result.rc is defined else '')) }}
+    raw_node_failure_action: "{{ 'destroy' if (raw_node_platform.can_destroy | bool) else 'quarantine' }}"
+    raw_node_failure_file: "{{ raw_node_records_dir }}/{{ raw_node_hostname }}/failure.yml"
+    raw_node_failure_time: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Build the failure record
+  ansible.builtin.set_fact:
+    raw_node_failure_record:
+      hostname: "{{ raw_node_hostname }}"
+      time: "{{ raw_node_failure_time }}"
+      attempt:
+        target_platform: "{{ target_platform }}"
+        strategy: "{{ raw_node_delivery_strategy }}"
+        transport: "{{ raw_node_platform.transport }}"
+        started: "{{ raw_node_attempt_started | default(none) }}"
+      platform: "{{ raw_node_platform }}"
+      failed_task: "{{ raw_node_failure_task }}"
+      reason: "{{ 'no_report' if (raw_node_failure_no_report | bool) else raw_node_failure_detail }}"
+      detail: "{{ raw_node_failure_detail }}"
+      clause: >-
+        {{ 'none checked: no report was received'
+           if (raw_node_failure_no_report | bool)
+           else (raw_node_validation_failed_clause | default('unknown: no RN-* clause was reached or named')) }}
+      action: "{{ raw_node_failure_action }}"
+
+- name: Write the failure record
+  ansible.builtin.copy:
+    dest: "{{ raw_node_failure_file }}"
+    mode: "0644"
+    content: |
+      # Failure record written by uc-raw-node. Public data only.
+      {{ raw_node_failure_record | to_nice_yaml(indent=2, sort_keys=false) }}
+
+- name: Set attempt state to failed
+  ansible.builtin.include_tasks: set_attempt_state.yml
+  vars:
+    raw_node_attempt_new_state: failed
+
+- name: Destroy the node
+  when: raw_node_platform.can_destroy | bool
+  block:
+    - name: Tear down through the transport
+      ansible.builtin.include_role:
+        name: "raw_node_transport_{{ raw_node_platform.transport }}"
+        tasks_from: destroy
+
+    - name: Set attempt state to destroyed
+      ansible.builtin.include_tasks: set_attempt_state.yml
+      vars:
+        raw_node_attempt_new_state: destroyed
+
+  rescue:
+    - name: Add the teardown error to the failure record
+      ansible.builtin.copy:
+        dest: "{{ raw_node_failure_file }}"
+        mode: "0644"
+        content: |
+          # Failure record written by uc-raw-node. Public data only.
+          {{ raw_node_failure_record
+             | combine({'action': 'quarantine',
+                        'teardown_error': {
+                          'task': ansible_failed_task.name | default('unknown task'),
+                          'message': (ansible_failed_result.msg | default('no message') | string | truncate(500))
+                                     ~ ((' (return code ' ~ ansible_failed_result.rc ~ ')')
+                                        if ansible_failed_result.rc is defined else ''),
+                          'platform_error': ansible_failed_result.stderr | default('') | string | trim | truncate(300)}})
+             | to_nice_yaml(indent=2, sort_keys=false) }}
+
+    - name: Set attempt state to quarantined after a failed teardown
+      ansible.builtin.include_tasks: set_attempt_state.yml
+      vars:
+        raw_node_attempt_new_state: quarantined
+
+    - name: Alert that the node is quarantined after a failed teardown
+      ansible.builtin.debug:
+        msg: >-
+          ALERT: teardown of {{ raw_node_hostname }} failed, so the node is
+          quarantined and may still exist on {{ target_platform }}. See
+          {{ raw_node_failure_file }}.
+
+- name: Quarantine the node
+  when: not (raw_node_platform.can_destroy | bool)
+  block:
+    - name: Set attempt state to quarantined
+      ansible.builtin.include_tasks: set_attempt_state.yml
+      vars:
+        raw_node_attempt_new_state: quarantined
+
+    - name: Alert that the node is quarantined
+      ansible.builtin.debug:
+        msg: >-
+          ALERT: {{ target_platform }} cannot be destroyed by the controller,
+          so {{ raw_node_hostname }} is quarantined. Handle it manually. See
+          {{ raw_node_failure_file }}.
+
+- name: Delete the node's secrets
+  ansible.builtin.file:
+    path: "{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}"
+    state: absent
+  no_log: true
+
+- name: End the run with the original failure
+  ansible.builtin.fail:
+    msg: >-
+      Build of {{ raw_node_hostname }} failed at '{{ raw_node_failure_task }}':
+      {{ raw_node_failure_detail }} Attempt state: {{ raw_node_attempt_state }}.
+      Failure record: {{ raw_node_failure_file }}.

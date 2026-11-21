@@ -1,0 +1,40 @@
+# tests/tasks/run_playbook.yml
+#
+# Runs one test playbook as its own ansible-playbook process, from the
+# repository root, and registers raw_node_test_run. Parameters:
+#   raw_node_test_playbook  path relative to tests/
+#   raw_node_test_args      extra arguments (list)
+
+- name: "Run {{ raw_node_test_playbook }} {{ raw_node_test_args | join(' ') }}"
+  ansible.builtin.command:
+    argv: >-
+      {{ ['ansible-playbook', '-i', 'localhost,', '-c', 'local', playbook_dir ~ '/' ~ raw_node_test_playbook]
+         + raw_node_test_args + raw_node_test_extra_args }}
+    chdir: "{{ playbook_dir }}/.."
+  environment:
+    PATH: "{{ raw_node_test_path }}"
+    ANSIBLE_NOCOLOR: "1"
+  register: raw_node_test_run
+  changed_when: true
+  failed_when: false
+
+- name: Look up the test instance
+  ansible.builtin.command:
+    argv: [incus, list, "--project={{ raw_node_test_project }}", --format=json]
+  environment:
+    PATH: "{{ raw_node_test_path }}"
+  register: raw_node_test_instances
+  changed_when: false
+
+- name: Note whether the test instance exists and what the attempt record says
+  ansible.builtin.set_fact:
+    raw_node_test_exists: >-
+      {{ raw_node_test_instances.stdout | from_json
+         | selectattr('name', 'equalto', raw_node_test_hostname) | list | length > 0 }}
+    raw_node_test_marker: >-
+      {{ (raw_node_test_instances.stdout | from_json
+          | selectattr('name', 'equalto', raw_node_test_hostname)
+          | map(attribute='config') | map('default', {}) | first | default({}))
+         .get('user.uc-raw-node.created', '') }}
+    raw_node_test_attempt: "{{ lookup('ansible.builtin.file', raw_node_test_records ~ '/attempt.yml', errors='ignore') | default('', true) | from_yaml }}"
+    raw_node_test_console: "{{ raw_node_test_run.stdout ~ raw_node_test_run.stderr }}"

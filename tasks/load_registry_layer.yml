@@ -1,4 +1,4 @@
-# roles/raw_node_controller/tasks/load_registry_layer.yml
+# tasks/load_registry_layer.yml
 - name: "Load registry layer {{ raw_node_registry_file }}"
   block:
     - name: Parse layer

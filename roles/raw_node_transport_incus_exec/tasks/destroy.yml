@@ -1,25 +1,121 @@
 # roles/raw_node_transport_incus_exec/tasks/destroy.yml
 #
-# Called by the controller's failure.yml when can_destroy is true.
-# Only deletes an instance this transport created in the current run.
+# Destroys the node's instance, called with tasks_from: destroy by the
+# controller's handle_failure.yml (inside build.yml) and by destroy.yml.
+# Needs only raw_node_hostname and raw_node_incus_project; the instance
+# name comes from raw_node_incus_instance, which defaults to the hostname.
+#
+# Ownership marker: when this transport launches an instance it sets the
+# Incus user keys user.uc-raw-node.created=true and
+# user.uc-raw-node.hostname=<hostname>. An instance is only deleted if it
+# carries both, with the hostname matching. Ownership therefore lives on
+# the platform and can be checked from any controller host.
+#
+# In build.yml (raw_node_destroy_standalone not true), only an instance that
+# this run launched is deleted, and an adopted instance is never deleted
+# even if it carries the marker. If this run launched nothing, there is
+# nothing of this attempt's to delete, and the task file succeeds without
+# touching any instance.
+#
+# In destroy.yml (raw_node_destroy_standalone: true), any instance carrying
+# the marker for this hostname is deleted.
+#
+# An instance that is missing counts as already gone. A refusal fails, so
+# the caller records it (handle_failure.yml quarantines the node).
 
-- name: Delete instance created by this run
-  ansible.builtin.command:
-    argv:
-      - "{{ raw_node_incus_bin }}"
-      - delete
-      - --force
-      - "--project={{ raw_node_transport_result.project }}"
-      - "{{ raw_node_transport_result.instance }}"
-  when:
-    - raw_node_transport_result is defined
-    - raw_node_transport_result.created | bool
+- name: Check teardown inputs
+  ansible.builtin.assert:
+    that:
+      - raw_node_hostname is defined and raw_node_hostname | length > 0
+      - raw_node_incus_instance is string and raw_node_incus_instance | length > 0
+    fail_msg: raw_node_transport_incus_exec teardown needs raw_node_hostname.
+    quiet: true
 
-- name: Note that an adopted instance was left in place
+- name: Set teardown context
+  ansible.builtin.set_fact:
+    raw_node_incus_teardown_standalone: "{{ raw_node_destroy_standalone | default(false) | bool }}"
+    raw_node_incus_teardown_launched: "{{ raw_node_incus_launched | default(false) | bool }}"
+    raw_node_incus_teardown_adopted: "{{ raw_node_incus_adopted | default(false) | bool }}"
+
+- name: Note that this attempt launched no instance
   ansible.builtin.debug:
     msg: >-
-      Instance '{{ raw_node_transport_result.instance }}' existed before this
-      run and was not deleted. Handle it manually.
+      This attempt did not launch instance '{{ raw_node_incus_instance }}',
+      so there is nothing of its own to delete. Any instance with that name
+      was left as it is.
   when:
-    - raw_node_transport_result is defined
-    - not (raw_node_transport_result.created | bool)
+    - not (raw_node_incus_teardown_standalone | bool)
+    - not (raw_node_incus_teardown_launched | bool)
+    - not (raw_node_incus_teardown_adopted | bool)
+
+- name: Tear down the instance
+  when: >-
+    (raw_node_incus_teardown_standalone | bool)
+    or (raw_node_incus_teardown_launched | bool)
+    or (raw_node_incus_teardown_adopted | bool)
+  block:
+    - name: Refuse to delete an adopted instance
+      ansible.builtin.fail:
+        msg: >-
+          Instance '{{ raw_node_incus_instance }}' in project
+          '{{ raw_node_incus_project }}' existed before this run and was
+          adopted. It was not deleted. Handle it manually.
+      when:
+        - not (raw_node_incus_teardown_standalone | bool)
+        - raw_node_incus_teardown_adopted | bool
+
+    - name: Look up instance for teardown
+      ansible.builtin.command:
+        argv:
+          - "{{ raw_node_incus_bin }}"
+          - list
+          - "--project={{ raw_node_incus_project }}"
+          - --format=json
+      register: raw_node_incus_teardown_list
+      changed_when: false
+
+    - name: Read the instance and its ownership marker
+      ansible.builtin.set_fact:
+        raw_node_incus_teardown_found: "{{ raw_node_incus_teardown_matches | length > 0 }}"
+        raw_node_incus_teardown_owned: >-
+          {{ raw_node_incus_teardown_matches | length > 0
+             and ((raw_node_incus_teardown_matches | first).config | default({}))
+                 .get(raw_node_incus_marker_created_key, '') == 'true'
+             and ((raw_node_incus_teardown_matches | first).config | default({}))
+                 .get(raw_node_incus_marker_hostname_key, '') == raw_node_hostname }}
+      vars:
+        raw_node_incus_teardown_matches: >-
+          {{ raw_node_incus_teardown_list.stdout | from_json
+             | selectattr('name', 'equalto', raw_node_incus_instance) | list }}
+
+    - name: Note that the instance is already gone
+      ansible.builtin.debug:
+        msg: >-
+          Instance '{{ raw_node_incus_instance }}' does not exist in project
+          '{{ raw_node_incus_project }}'. Nothing to delete.
+      when: not (raw_node_incus_teardown_found | bool)
+
+    - name: Refuse to delete an instance without the ownership marker
+      ansible.builtin.fail:
+        msg: >-
+          Instance '{{ raw_node_incus_instance }}' in project
+          '{{ raw_node_incus_project }}' does not carry the uc-raw-node
+          ownership marker for hostname '{{ raw_node_hostname }}'
+          ({{ raw_node_incus_marker_created_key }}=true and
+          {{ raw_node_incus_marker_hostname_key }}={{ raw_node_hostname }}).
+          It was not created by this controller and was not deleted.
+      when:
+        - raw_node_incus_teardown_found | bool
+        - not (raw_node_incus_teardown_owned | bool)
+
+    - name: Delete instance
+      ansible.builtin.command:
+        argv:
+          - "{{ raw_node_incus_bin }}"
+          - delete
+          - --force
+          - "--project={{ raw_node_incus_project }}"
+          - "{{ raw_node_incus_instance }}"
+      when:
+        - raw_node_incus_teardown_found | bool
+        - raw_node_incus_teardown_owned | bool

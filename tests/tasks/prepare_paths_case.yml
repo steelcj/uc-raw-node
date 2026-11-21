@@ -1,0 +1,79 @@
+# tests/tasks/prepare_paths_case.yml
+#
+# One case of tests/prepare_paths.yml. raw_node_test_case has name, root,
+# base (where records, reports and logs go), secrets and expect (continue
+# or stop).
+
+- name: "Set the paths for: {{ raw_node_test_case.name }}"
+  ansible.builtin.set_fact:
+    raw_node_root: "{{ raw_node_test_case.root }}"
+    raw_node_records_path: "{{ raw_node_test_case.base }}/records"
+    raw_node_reports_path: "{{ raw_node_test_case.base }}/reports"
+    raw_node_logs_path: "{{ raw_node_test_case.base }}/logs"
+    raw_node_secrets_path: "{{ raw_node_test_case.secrets }}"
+    raw_node_test_outcome: unknown
+
+- name: "Run the steps for: {{ raw_node_test_case.name }}"
+  block:
+    - name: Prepare output paths
+      ansible.builtin.include_tasks: ../../tasks/prepare_paths.yml
+
+    - name: Write attempt record
+      ansible.builtin.include_tasks: ../../tasks/write_attempt.yml
+
+    - name: Note that the case continued
+      ansible.builtin.set_fact:
+        raw_node_test_outcome: continue
+
+  rescue:
+    - name: Note that the case stopped
+      ansible.builtin.set_fact:
+        raw_node_test_outcome: stop
+        raw_node_test_message: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Look for the attempt record and the node's secrets directory
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ raw_node_test_case.base }}/records/{{ raw_node_hostname }}/attempt.yml"
+    - "{{ raw_node_test_case.base }}/records/{{ raw_node_hostname }}"
+  register: raw_node_test_written
+
+- name: Read the attempt record
+  ansible.builtin.set_fact:
+    raw_node_test_attempt: "{{ lookup('ansible.builtin.file', raw_node_test_written.results[0].stat.path) | from_yaml }}"
+  when: raw_node_test_written.results[0].stat.exists
+
+- name: Look at the created secrets directories
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ raw_node_secrets_dir }}"
+    - "{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}"
+  register: raw_node_test_secrets_stats
+  when: raw_node_test_outcome == 'continue'
+  no_log: true
+
+- name: "Check the outcome for: {{ raw_node_test_case.name }}"
+  ansible.builtin.assert:
+    that:
+      - raw_node_test_outcome == raw_node_test_case.expect
+      # A stopped case writes nothing.
+      - raw_node_test_outcome == 'continue' or not raw_node_test_written.results[1].stat.exists
+      # A case that continues writes the attempt record, in_progress, with no credentials.
+      - raw_node_test_outcome == 'stop' or raw_node_test_attempt.state == 'in_progress'
+      - raw_node_test_outcome == 'stop' or raw_node_test_attempt.keys() | sort == ['hostname', 'started', 'state', 'strategy', 'target_platform', 'transport', 'updated']
+      # ... and creates the secrets directories with mode 0700.
+      - raw_node_test_outcome == 'stop' or raw_node_test_secrets_stats.results | map(attribute='stat.mode') | unique | list == ['0700']
+    fail_msg: >-
+      Case '{{ raw_node_test_case.name }}' expected {{ raw_node_test_case.expect }}
+      and got {{ raw_node_test_outcome }}. {{ raw_node_test_message | default('') }}
+    quiet: true
+
+- name: Collect the case result
+  ansible.builtin.set_fact:
+    raw_node_test_results: >-
+      {{ raw_node_test_results | default([])
+         + [raw_node_test_case.name ~ ': ' ~ raw_node_test_outcome
+            ~ ((' (' ~ raw_node_test_message ~ ')') if raw_node_test_outcome == 'stop' else '')] }}
+    raw_node_test_message: ""

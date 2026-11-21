@@ -1,4 +1,4 @@
-# roles/raw_node_controller/tasks/resolve_platform.yml
+# tasks/resolve_platform.yml
 - name: Assert platform is in the registry
   ansible.builtin.assert:
     that:

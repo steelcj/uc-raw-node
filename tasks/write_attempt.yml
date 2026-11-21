@@ -1,0 +1,33 @@
+# tasks/write_attempt.yml
+#
+# Writes records/<hostname>/attempt.yml after the output paths are prepared
+# and before anything touches a platform. The record is copied from the
+# resolved platform and the hostname only, never from the rest of the
+# contract input, so it holds no credentials.
+#
+# Sets raw_node_attempt_file, raw_node_attempt_started and
+# raw_node_attempt_state. Later steps change the state with
+# set_attempt_state.yml.
+
+- name: Set attempt record location and start time
+  ansible.builtin.set_fact:
+    raw_node_attempt_file: "{{ raw_node_records_dir }}/{{ raw_node_hostname }}/attempt.yml"
+    raw_node_attempt_started: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+    raw_node_attempt_state: in_progress
+
+- name: Write attempt record
+  ansible.builtin.copy:
+    dest: "{{ raw_node_attempt_file }}"
+    mode: "0644"
+    content: |
+      # Attempt record written by uc-raw-node. Public data only.
+      {{ raw_node_attempt_record | to_nice_yaml(indent=2, sort_keys=false) }}
+  vars:
+    raw_node_attempt_record:
+      hostname: "{{ raw_node_hostname }}"
+      target_platform: "{{ target_platform }}"
+      strategy: "{{ raw_node_delivery_strategy }}"
+      transport: "{{ raw_node_platform.transport }}"
+      started: "{{ raw_node_attempt_started }}"
+      updated: "{{ raw_node_attempt_started }}"
+      state: "{{ raw_node_attempt_state }}"

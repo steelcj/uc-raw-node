@@ -1,0 +1,37 @@
+# tasks/write_confirmation.yml
+#
+# Writes records/<hostname>/confirmation.yml, the hand-off to the
+# orchestration controller, in the format the strategy document defines:
+# keyed by hostname, with timestamp, ip, ip6, user and sudo. Then sets the
+# attempt state to confirmed and deletes the node's directory under the
+# secrets path.
+#
+# The addresses come from the node's report. The user name is the one
+# public field taken from the contract input: the report does not carry it
+# yet.
+
+- name: Write confirmation
+  ansible.builtin.copy:
+    dest: "{{ raw_node_records_dir }}/{{ raw_node_hostname }}/confirmation.yml"
+    mode: "0644"
+    content: |
+      # Confirmation written by uc-raw-node. Public data only.
+      {{ {raw_node_hostname: raw_node_confirmation} | to_nice_yaml(indent=2, sort_keys=false) }}
+  vars:
+    raw_node_confirmation:
+      timestamp: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      ip: "{{ raw_node_report_ipv4 | first | default(none) }}"
+      ip6: "{{ raw_node_report_ipv6 | first | default(none) }}"
+      user: "{{ raw_node_input.initial_username }}"
+      sudo: true
+
+- name: Set attempt state to confirmed
+  ansible.builtin.include_tasks: set_attempt_state.yml
+  vars:
+    raw_node_attempt_new_state: confirmed
+
+- name: Delete the node's secrets
+  ansible.builtin.file:
+    path: "{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}"
+    state: absent
+  no_log: true

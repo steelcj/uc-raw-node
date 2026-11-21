@@ -1,13 +1,13 @@
 # The Platform Registry
 
-- **Version:** 0.1.4
-- **Date:** 2026-11-20
+- **Version:** 0.1.5
+- **Date:** 2026-11-21
 - **License:** Proprietary / Internal Use Only
 - **Author:** Christopher Steel
 
 ## Purpose
 
-The platform registry is the data that tells `uc-raw-node` how to build a raw node on a given platform: which delivery strategy to use, which transport delivers the payload, and what the platform can and cannot do. It is the single authority for registry fields, contents and consumer logic. The design that the registry serves is described in [Collapse Strategy for a Raw Node Controller](collapsable-strategy-for-a-raw-node-controller-v0.1.10.md).
+The platform registry is the data that tells `uc-raw-node` how to build a raw node on a given platform: which delivery strategy to use, which transport delivers the payload, and what the platform can and cannot do. It is the single authority for registry fields, contents and consumer logic. The design that the registry serves is described in [Collapse Strategy for a Raw Node Controller](collapsable-strategy-for-a-raw-node-controller-v0.1.11.md).
 
 Only the raw node controller reads the registry. The orchestration controller never does.
 
@@ -21,11 +21,11 @@ The registry is configuration, not state. The controller never writes to it; eve
 
 ## Location and layering
 
-The registry is not stored in the role's `vars/` directory. Role vars override play vars and inventory variables, so a client could not easily change or extend a registry kept there; values in a role's `defaults/` are the ones meant to be overridden <a id="cite-ansible-precedence"></a>[(Ansible Project, n.d.)](#ref-ansible-precedence).
+The registry is not stored in a role's `vars/` directory. Role vars override play vars and inventory variables, so a client could not easily change or extend a registry kept there; values in a role's `defaults/` are the ones meant to be overridden <a id="cite-ansible-precedence"></a>[(Ansible Project, n.d.)](#ref-ansible-precedence).
 
 Instead, the registry is plain YAML in one or more files, listed in `raw_node_registry_files`:
 
-- The base registry ships with the role at `roles/raw_node_controller/files/registry.yml`.
+- The base registry ships with the controller at `registry/base.yml`. Client layers sit beside it under `registry/clients/`, for example `registry/clients/vishpala.yml`.
 - A client or site can add its own file after the base one, to add platforms or change entries. Later files are merged over earlier ones.
 
 This follows the same pattern as a configuration cascade: shared defaults first, then the more specific layers.
@@ -39,12 +39,14 @@ This follows the same pattern as a configuration cascade: shared defaults first,
 
 ### Defaults
 
-```yaml
-# roles/raw_node_controller/defaults/main.yml
-raw_node_registry_files:
-  - "{{ role_path }}/files/registry.yml"
+The controller's defaults are in `vars/defaults.yml`, which the entry playbooks (`build.yml`, `validate.yml`, `destroy.yml`) load through `vars_files`. Each can be overridden with `-e`; a client layer is added by giving `raw_node_registry_files` with the extra file appended. The registry-related part of the file:
 
-raw_node_input_file: "{{ playbook_dir }}/raw-node-input.yml"
+```yaml
+# vars/defaults.yml (excerpt)
+raw_node_root: "{{ playbook_dir }}"
+
+raw_node_registry_files:
+  - "{{ raw_node_root }}/registry/base.yml"
 
 raw_node_input_required_fields:
   - hostname
@@ -52,8 +54,6 @@ raw_node_input_required_fields:
   - initial_username
   - initial_password_hash
   - ssh_public_key
-
-raw_node_artifacts_dir: "{{ playbook_dir }}/artifacts/{{ raw_node_hostname }}"
 
 raw_node_strategies:
   - cloud_init
@@ -75,6 +75,8 @@ raw_node_platform_defaults:
   status: unverified
   notes: ""
 ```
+
+The rest of the file holds the output paths and the report timeout, which are described in *Raw Node Controller Layout Design*.
 
 ## Field reference
 
@@ -101,7 +103,7 @@ An entry becomes `active` only when a maintainer changes its status, after a nod
 ## Base registry
 
 ```yaml
-# roles/raw_node_controller/files/registry.yml
+# registry/base.yml
 # Platform-to-strategy mapping for the uc-raw-node controller.
 
 platforms:
@@ -248,7 +250,7 @@ Whether a transport is implemented is checked only for the entry being used, not
 ### Loading one layer
 
 ```yaml
-# roles/raw_node_controller/tasks/load_registry_layer.yml
+# tasks/load_registry_layer.yml
 - name: "Load registry layer {{ raw_node_registry_file }}"
   block:
     - name: Parse layer
@@ -281,7 +283,7 @@ Whether a transport is implemented is checked only for the entry being used, not
 ### Validating the merged registry
 
 ```yaml
-# roles/raw_node_controller/tasks/validate_registry.yml
+# tasks/validate_registry.yml
 - name: Load registry layers in order
   ansible.builtin.include_tasks: load_registry_layer.yml
   loop: "{{ raw_node_registry_files }}"
@@ -332,48 +334,51 @@ The conditions in each assert are checked in order and stop at the first one tha
 
 ## Consumer logic
 
-The entry point validates the registry, loads and checks the contract input, then resolves the requested platform and applies defaults before dispatching. It does not use `hosts` or `groups`. Platform resolution is kept in its own file, `resolve_platform.yml`, so tests and tools can validate and resolve a platform without building anything. The contract input checks in `load_input.yml` are described in the design document.
+The entry point, `build.yml`, validates the registry, loads and checks the contract input, then resolves the requested platform and applies defaults before dispatching. It does not use `hosts` or `groups`. Platform resolution is kept in its own file, `tasks/resolve_platform.yml`, so tests and tools can validate and resolve a platform without building anything; `validate.yml` runs those first three steps and nothing else. The contract input checks in `tasks/load_input.yml` are described in the design document.
 
 ```yaml
-# roles/raw_node_controller/tasks/main.yml
-- name: Load and validate the registry
-  ansible.builtin.include_tasks: validate_registry.yml
+# build.yml (tasks)
+- name: Validate registry
+  ansible.builtin.include_tasks: tasks/validate_registry.yml
 
-- name: Load and check the contract input
-  ansible.builtin.include_tasks: load_input.yml
+- name: Load and check contract input
+  ansible.builtin.include_tasks: tasks/load_input.yml
 
-- name: Resolve and check the target platform
-  ansible.builtin.include_tasks: resolve_platform.yml
+- name: Resolve platform
+  ansible.builtin.include_tasks: tasks/resolve_platform.yml
 
-- name: Build, deliver and validate
+- name: Prepare output paths
+  ansible.builtin.include_tasks: tasks/prepare_paths.yml
+
+- name: Write attempt record
+  ansible.builtin.include_tasks: tasks/write_attempt.yml
+
+- name: Build, verify and confirm
   block:
-    - name: Render raw-node-firstboot payload
-      ansible.builtin.include_tasks: payload.yml
+    - name: Render payload
+      ansible.builtin.include_tasks: tasks/payload.yml
 
-    - name: Render strategy artifacts
-      ansible.builtin.include_tasks: "{{ raw_node_delivery_strategy }}/artifacts.yml"
-
-    - name: Deliver through transport
+    - name: Deliver via transport
       ansible.builtin.include_role:
         name: "raw_node_transport_{{ raw_node_platform.transport }}"
 
     - name: Wait for phone-home report
-      ansible.builtin.include_tasks: wait_for_phone_home.yml
+      ansible.builtin.include_tasks: tasks/wait_phone_home.yml
 
     - name: Validate contract
       ansible.builtin.include_role:
         name: raw_node_validator
 
-    - name: Write confirmation.yml
-      ansible.builtin.include_tasks: write_confirmation.yml
+    - name: Write confirmation
+      ansible.builtin.include_tasks: tasks/write_confirmation.yml
 
   rescue:
-    - name: Handle failure by platform capability
-      ansible.builtin.include_tasks: failure.yml
+    - name: Handle failure
+      ansible.builtin.include_tasks: tasks/handle_failure.yml
 ```
 
 ```yaml
-# roles/raw_node_controller/tasks/resolve_platform.yml
+# tasks/resolve_platform.yml
 - name: Assert platform is in the registry
   ansible.builtin.assert:
     that:
@@ -418,7 +423,7 @@ The entry point validates the registry, loads and checks the contract input, the
   when: raw_node_platform.status == 'unverified'
 ```
 
-The transport role reads `raw_node_platform` and `raw_node_artifacts_dir` directly, so `include_role` passes no extra variables. `failure.yml` uses `can_destroy` and `fallback` to decide between destroying, a single fallback attempt, and quarantine, as set out in the design document's failure and fallback sections.
+The transport role reads `raw_node_platform` and the expanded output paths set by `tasks/prepare_paths.yml` directly, so `include_role` passes no extra variables. `tasks/handle_failure.yml` uses `can_destroy` to decide between destroying and quarantine, as set out in the design document's failure and fallback sections; the single fallback attempt after failure waits for the design document's open question on post-failure fallback.
 
 ## Adding a platform
 
@@ -449,6 +454,13 @@ The work for the first entry, in order, with its status:
 - Should client layers be allowed to override fields of a base entry, or only add new entries and exclude existing ones?
 
 ## Changes
+
+### From v0.1.4 to v0.1.5
+
+- Updated paths for the controller layout migration (*Raw Node Controller Layout Design* v0.1.8): the base registry is `registry/base.yml`, client layers go in `registry/clients/`, the defaults are in `vars/defaults.yml`, and the task files are in `tasks/`. No path points into the removed `raw_node_controller` role.
+- Replaced the consumer logic's `main.yml` with the tasks of `build.yml`, the new entry point, and noted `validate.yml`.
+- Removed `raw_node_input_file` and `raw_node_artifacts_dir` from the defaults: the contract input now arrives as extra vars, and output goes to the records, reports, logs and secrets paths.
+- Pointed the link to the strategy document to v0.1.11.
 
 ### From v0.1.3 to v0.1.4
 

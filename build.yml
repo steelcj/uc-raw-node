@@ -1,0 +1,55 @@
+---
+# Pipeline: validate registry, load input, resolve platform, prepare
+# output paths, write the attempt record, then inside one block: render
+# payload, deliver via transport, wait for report, validate contract,
+# write confirmation.
+# Any failure inside the block runs tasks/handle_failure.yml, which writes
+# the failure record first, then destroys or quarantines the node.
+# Failures before the block stop the run with nothing to clean up.
+
+- name: Build a raw node
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/defaults.yml
+
+  tasks:
+    - name: Validate registry
+      ansible.builtin.include_tasks: tasks/validate_registry.yml
+
+    - name: Load and check contract input
+      ansible.builtin.include_tasks: tasks/load_input.yml
+
+    - name: Resolve platform
+      ansible.builtin.include_tasks: tasks/resolve_platform.yml
+
+    - name: Prepare output paths
+      ansible.builtin.include_tasks: tasks/prepare_paths.yml
+
+    - name: Write attempt record
+      ansible.builtin.include_tasks: tasks/write_attempt.yml
+
+    - name: Build, verify and confirm
+      block:
+        - name: Render payload
+          ansible.builtin.include_tasks: tasks/payload.yml
+
+        - name: Deliver via transport
+          ansible.builtin.include_role:
+            name: "raw_node_transport_{{ raw_node_platform.transport }}"
+
+        - name: Wait for phone-home report
+          ansible.builtin.include_tasks: tasks/wait_phone_home.yml
+
+        - name: Validate contract
+          ansible.builtin.include_role:
+            name: raw_node_validator
+
+        - name: Write confirmation
+          ansible.builtin.include_tasks: tasks/write_confirmation.yml
+
+      rescue:
+        - name: Handle failure
+          ansible.builtin.include_tasks: tasks/handle_failure.yml

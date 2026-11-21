@@ -1,7 +1,7 @@
 # Collapse Strategy for a Raw Node Controller
 
-- **Version:** 0.1.10
-- **Date:** 2026-11-20
+- **Version:** 0.1.11
+- **Date:** 2026-11-21
 - **License:** Proprietary / Internal Use Only
 - **Author:** Christopher Steel
 
@@ -19,7 +19,7 @@ To minimize complexity, the controller collapses the taxonomy into one payload, 
 
 | Field | Rule | Used for |
 | :-- | :-- | :-- |
-| `hostname` | A single lowercase DNS label: letters, digits and hyphens, 1 to 63 characters, not starting or ending with a hyphen | The node's hostname, the key of `confirmation.yml`, the instance name on platforms that name instances, and the artifacts directory |
+| `hostname` | A single lowercase DNS label: letters, digits and hyphens, 1 to 63 characters, not starting or ending with a hyphen | The node's hostname, the key of `confirmation.yml`, the instance name on platforms that name instances, and the node's directory under the controller's output and secrets paths |
 | `root_password_hash` | A crypt hash such as `$y$...` or `$6$...`; plaintext is rejected | The root password |
 | `initial_username` | A valid user name that is not `root` | The initial sudo user |
 | `initial_password_hash` | A crypt hash; plaintext is rejected | The initial user's password |
@@ -62,7 +62,7 @@ The boundary between `installer` and `cloud_init` is deliberately blurred for Ub
 
 The platform registry and the Ansible inventory answer different questions. The inventory describes hosts that exist, so Ansible can reach them. The registry describes how to build a host on a given platform, and is not tied to any running instance. `confirmation.yml` is the hand-off point: the controller uses the registry to build a node, and the orchestration controller turns the resulting confirmation into inventory.
 
-The registry's fields, its full contents, how it is layered per client, and the Ansible logic that consumes it are defined in [The Platform Registry](1-the-platform-registry-v0.1.4.md). That document is authoritative; this one only shows the outline.
+The registry's fields, its full contents, how it is layered per client, and the Ansible logic that consumes it are defined in [The Platform Registry](1-the-platform-registry-v0.1.5.md). That document is authoritative; this one only shows the outline.
 
 ## Controller routing flow
 
@@ -238,6 +238,7 @@ The payload carries password hashes and an SSH key, and every transport leaves a
 - **Metadata endpoints.** On clouds such as AWS, user-data stays readable from inside the instance through the metadata service. Instances should be launched requiring IMDSv2 (token-based requests) <a id="cite-aws-imdsv2"></a>[(Amazon Web Services, n.d.)](#ref-aws-imdsv2). Hashes are acceptable in user-data; plaintext secrets are not.
 - **Seed media.** Detach NoCloud seed volumes and config drives after validation.
 - **USB and PXE.** uc-ventoy output on the stick and PXE answer files should be treated as credentials and removed or rotated after the install batch.
+- **Controller staging.** The rendered payload and the phone-home token are staged on the controller host only in the secrets path, `<raw_node_secrets_path>/<hostname>/` (by default `~/.secrets/uc-raw-node/<hostname>/`, outside the repository), in directories with mode 0700 and files with mode 0600. They are deleted after delivery, or once validation passes where the transport needs them until then, and by failure handling.
 - **Payload cleanup.** `raw-node-firstboot` deletes its own staged copy and the phone-home token after running.
 
 ### Init systems and degraded paths
@@ -254,7 +255,7 @@ The raw node contract only asks for the baseline nftables ruleset. The controlle
 
 ## Ansible implementation pattern
 
-A single entry point in `roles/raw_node_controller/tasks/main.yml` runs the following steps. The exact registry and dispatch tasks are in [The Platform Registry](1-the-platform-registry-v0.1.4.md); the input checks are in `load_input.yml`.
+A single entry point, `build.yml`, runs the following steps; `validate.yml` runs only the checks, and `destroy.yml` tears a node down by hostname. The layout is defined in *Raw Node Controller Layout Design*. The exact registry and dispatch tasks are in [The Platform Registry](1-the-platform-registry-v0.1.5.md); the input checks are in `load_input.yml`.
 
 - Load the registry layers (base registry, then any client layers) and validate every entry and fallback in the merged registry.
 - Load `raw-node-input.yml` and check every field.
@@ -326,6 +327,12 @@ A thin **IaC adapter**, packaged separately, can:
 - Is the `image` strategy needed for the first release, or can it wait until an air-gapped client needs it?
 
 ## Changes
+
+### From v0.1.10 to v0.1.11
+
+- Named `build.yml` as the entry point in the Ansible implementation pattern, replacing `roles/raw_node_controller/tasks/main.yml`, after the controller layout migration (*Raw Node Controller Layout Design* v0.1.8).
+- Added the secrets path to credential exposure as the only place on the controller where the payload and token are staged.
+- Replaced the artifacts directory with the node's output and secrets directories in the contract input table, and pointed the registry links to v0.1.5.
 
 ### From v0.1.9 to v0.1.10
 

@@ -1,4 +1,4 @@
-# roles/raw_node_controller/tasks/validate_registry.yml
+# tasks/validate_registry.yml
 - name: Load registry layers in order
   ansible.builtin.include_tasks: load_registry_layer.yml
   loop: "{{ raw_node_registry_files }}"

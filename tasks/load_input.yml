@@ -1,9 +1,23 @@
-# roles/raw_node_controller/tasks/load_input.yml
+# tasks/load_input.yml
 #
-# Loads raw-node-input.yml and checks every contract input field before
-# anything is built. Sets raw_node_input and raw_node_hostname.
+# Loads the contract input and checks every field before anything is
+# built. Sets raw_node_input and raw_node_hostname.
+#
+# The input normally arrives as extra vars (-e @raw-node-input.yml), as the
+# layout design gives the command. When raw_node_input_file is set, the
+# input is read from that file instead, and fields the controller does not
+# use produce a warning. Extra vars cannot be listed, so that warning is
+# only given for file input.
 
-- name: "Load contract input {{ raw_node_input_file }}"
+- name: Collect contract input from extra vars
+  ansible.builtin.set_fact:
+    raw_node_input: >-
+      {{ dict(raw_node_input_required_fields
+              | zip(query('ansible.builtin.vars', *raw_node_input_required_fields, default=''))) }}
+  when: raw_node_input_file is not defined
+
+- name: Load contract input file
+  when: raw_node_input_file is defined
   block:
     - name: Parse input file
       ansible.builtin.set_fact:
@@ -70,7 +84,9 @@
 - name: Warn about unknown input fields
   ansible.builtin.debug:
     msg: "Contract input has fields the controller does not use: {{ raw_node_input_unknown | join(', ') }}"
-  when: raw_node_input_unknown | length > 0
+  when:
+    - raw_node_input_file is defined
+    - raw_node_input_unknown | length > 0
   vars:
     raw_node_input_unknown: "{{ raw_node_input.keys() | difference(raw_node_input_required_fields) }}"
 
