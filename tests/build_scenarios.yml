@@ -38,7 +38,8 @@
     raw_node_test_scenarios: >-
       {{ ['success', 'payload_failure']
          + (['teardown_failure'] if raw_node_test_stand_in | bool else [])
-         + ['placeholders'] }}
+         + ['placeholders', 'refused_existing', 'adopted_failure'] }}
+    raw_node_test_image: "{{ raw_node_incus_image | default('images:debian/13') }}"
 
   tasks:
     - name: Expand the test output paths

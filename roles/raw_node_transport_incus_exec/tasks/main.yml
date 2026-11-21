@@ -5,12 +5,20 @@
 # incus client configured.
 #
 # Reads the payload from the node's secrets directory and writes the run log
-# to the node's logs directory. Tasks that touch the payload carry no_log;
+# to the node's logs directory.
+#
+# raw_node_transport_state tells the controller what this run did to the
+# platform, without the controller reading Incus names: none at the start,
+# adopted once an existing instance is accepted and before anything in it
+# changes, created just before the launch command. raw_node_incus_launched
+# and raw_node_incus_adopted, read by this role's destroy.yml, are set in
+# the same tasks, so the two can never disagree. Tasks that touch the payload carry no_log;
 # when one of them fails, the next task sets raw_node_failure_reason from
 # safe fields only (step, exit code, log path) and fails with it.
 
 - name: Start with no instance launched by this run
   ansible.builtin.set_fact:
+    raw_node_transport_state: none
     raw_node_incus_launched: false
     raw_node_incus_adopted: false
 
@@ -82,6 +90,7 @@
 
 - name: Note that an existing instance is adopted
   ansible.builtin.set_fact:
+    raw_node_transport_state: adopted
     raw_node_incus_adopted: true
   when: raw_node_incus_existed | bool
 
@@ -90,6 +99,7 @@
 # ownership marker is set atomically with the launch.
 - name: Note that this run launches the instance
   ansible.builtin.set_fact:
+    raw_node_transport_state: created
     raw_node_incus_launched: true
   when: not (raw_node_incus_existed | bool)
 

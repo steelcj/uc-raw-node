@@ -23,6 +23,18 @@ The role runs on the controller host, which must have the `incus` client configu
 
 The push and the run carry `no_log: true`, since they handle the payload. When either fails, the next task sets `raw_node_failure_reason` from safe fields only (the step, the exit code and the log path, never the output) and fails with it, so the controller's failure record can say what happened. The run log keeps the payload's output, which the payload's own output rules keep free of contract values and the token.
 
+## What the run did: raw_node_transport_state
+
+Every transport sets `raw_node_transport_state`, so the controller's `handle_failure.yml` can decide what to do after a failed build without reading Incus names:
+
+| Value | Set | Controller's action on failure |
+| :-- | :-- | :-- |
+| `none` | First task of `main.yml`, before any check that can fail | `aborted`: nothing was created, no teardown |
+| `adopted` | Once an existing instance is accepted (`raw_node_incus_allow_existing=true`), before anything in it changes | `quarantined`: the controller never deletes what it did not create |
+| `created` | Just before the `incus launch` command, so a launch that fails halfway still counts | Destroy through `tasks/destroy.yml` if `can_destroy`, else quarantine |
+
+If the build fails before the transport runs (for example in `payload.yml`), the fact is undefined, which the controller treats as `none`.
+
 ## The ownership marker
 
 When this transport launches an instance, it sets two Incus user keys at launch:
@@ -45,7 +57,7 @@ Teardown outcomes:
 | No instance with that name | Nothing to delete, succeeds | Nothing to delete, succeeds |
 | Instance launched by this run, marker present | Deleted | Not applicable |
 | Instance carries the marker, launched earlier | Left alone, succeeds | Deleted |
-| Instance adopted by this run | Refused, fails (controller quarantines) | Deleted only if it carries the marker |
+| Instance adopted by this run | Not called: the controller quarantines from `raw_node_transport_state`; if called, refused | Deleted only if it carries the marker |
 | Instance without the marker | Left alone, succeeds | Refused, fails |
 
 ## Inputs
@@ -81,10 +93,11 @@ The other settings stay in `defaults/main.yml` because an operator or the contro
 
 | Variable | Set by | Meaning |
 | :-- | :-- | :-- |
+| `raw_node_transport_state` | `main.yml` | What this run did to the platform: `none`, `adopted` or `created` (see below) |
 | `raw_node_transport_result` | `main.yml` | Instance, project, `created`, `payload_rc`, `ipv4`, `ipv6`, `log` |
 | `raw_node_transport_address` | `address.yml` | `found`, `ipv4`, `ipv6`, `ssh_host_keys`, `waited` |
 | `raw_node_failure_reason` | `main.yml`, on a failed push or payload run | Secret-free reason for the failure record |
-| `raw_node_incus_launched`, `raw_node_incus_adopted` | `main.yml` | Whether this run launched or adopted the instance; read by `destroy.yml` |
+| `raw_node_incus_launched`, `raw_node_incus_adopted` | `main.yml` | Whether this run launched or adopted the instance; read by this role's `destroy.yml`, set in the same tasks as `raw_node_transport_state` |
 
 ## Testing
 

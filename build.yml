@@ -4,7 +4,8 @@
 # payload, deliver via transport, wait for report, validate contract,
 # write confirmation.
 # Any failure inside the block runs tasks/handle_failure.yml, which writes
-# the failure record first, then destroys or quarantines the node.
+# the failure record first, then aborts (nothing was created), destroys or
+# quarantines the node.
 # Failures before the block stop the run with nothing to clean up.
 
 - name: Build a raw node
