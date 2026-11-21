@@ -1,0 +1,125 @@
+---
+# Tear down a node by hostname:
+#
+#   ansible-playbook destroy.yml -e hostname=web-01
+#
+# The platform comes from records/<hostname>/attempt.yml. If the attempt
+# record is missing (another controller host, or records deleted), supply
+# it with -e target_platform=<key>. The contract input is not needed and is
+# not loaded.
+#
+# Steps: check the hostname, validate the registry, prepare output paths,
+# read the platform from the attempt record or -e target_platform, resolve
+# the platform, stop if it cannot be destroyed, tear down through the
+# transport (tasks_from: destroy), set the attempt state to destroyed and
+# delete any of the node's files left under the secrets path. Records are
+# kept, so the node's history survives its teardown.
+#
+# The transport's own safety rules still apply: raw_node_transport_incus_exec
+# only deletes an instance carrying its ownership marker for this hostname.
+
+- name: Destroy a raw node
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/defaults.yml
+
+  vars:
+    # Tells the transport's teardown that this is not a build run, so it
+    # relies on the ownership marker alone.
+    raw_node_destroy_standalone: true
+
+  tasks:
+    # Same rule as the hostname field in tasks/load_input.yml.
+    - name: Check hostname
+      ansible.builtin.assert:
+        that:
+          - hostname is defined
+          - hostname is string
+          - hostname is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+        fail_msg: >-
+          Give the node's hostname with -e hostname=<hostname>: a single
+          lowercase DNS label, letters, digits and hyphens, 1 to 63
+          characters, not starting or ending with a hyphen.
+        quiet: true
+
+    - name: Set node hostname
+      ansible.builtin.set_fact:
+        raw_node_hostname: "{{ hostname }}"
+
+    - name: Validate registry
+      ansible.builtin.include_tasks: tasks/validate_registry.yml
+
+    - name: Prepare output paths
+      ansible.builtin.include_tasks: tasks/prepare_paths.yml
+
+    - name: Look for the attempt record
+      ansible.builtin.stat:
+        path: "{{ raw_node_records_dir }}/{{ raw_node_hostname }}/attempt.yml"
+      register: raw_node_destroy_attempt_stat
+
+    - name: Read the platform from the attempt record
+      ansible.builtin.set_fact:
+        raw_node_destroy_recorded_platform: >-
+          {{ (lookup('ansible.builtin.file', raw_node_destroy_attempt_stat.stat.path) | from_yaml).target_platform
+             | default('') }}
+      when: raw_node_destroy_attempt_stat.stat.exists
+
+    - name: Stop if the platform is unknown
+      ansible.builtin.assert:
+        that:
+          - raw_node_destroy_attempt_stat.stat.exists or target_platform is defined
+        fail_msg: >-
+          No attempt record for {{ raw_node_hostname }} in
+          {{ raw_node_records_dir }}, so the platform is unknown. Give it with
+          -e target_platform=<registry key>.
+        quiet: true
+
+    - name: Stop if the attempt record and -e target_platform disagree
+      ansible.builtin.assert:
+        that:
+          - not raw_node_destroy_attempt_stat.stat.exists
+            or target_platform is not defined
+            or target_platform == raw_node_destroy_recorded_platform
+        fail_msg: >-
+          The attempt record for {{ raw_node_hostname }} names platform
+          '{{ raw_node_destroy_recorded_platform | default('') }}', but
+          -e target_platform is '{{ target_platform | default('') }}'. Check
+          which is right, and drop -e target_platform to use the record.
+        quiet: true
+
+    - name: Take the platform from the attempt record
+      ansible.builtin.set_fact:
+        target_platform: "{{ raw_node_destroy_recorded_platform }}"
+      when: target_platform is not defined
+
+    - name: Resolve platform
+      ansible.builtin.include_tasks: tasks/resolve_platform.yml
+
+    - name: Stop if the platform cannot be destroyed by the controller
+      ansible.builtin.assert:
+        that:
+          - raw_node_platform.can_destroy | bool
+        fail_msg: >-
+          Platform '{{ target_platform }}' cannot be destroyed by the
+          controller (can_destroy is false). Tear {{ raw_node_hostname }} down
+          by hand. {{ raw_node_platform.notes }}
+        quiet: true
+
+    - name: Tear down through the transport
+      ansible.builtin.include_role:
+        name: "raw_node_transport_{{ raw_node_platform.transport }}"
+        tasks_from: destroy
+
+    - name: Set attempt state to destroyed
+      ansible.builtin.include_tasks: tasks/set_attempt_state.yml
+      vars:
+        raw_node_attempt_new_state: destroyed
+
+    - name: Delete the node's secrets
+      ansible.builtin.file:
+        path: "{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}"
+        state: absent
+      no_log: true

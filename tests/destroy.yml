@@ -1,0 +1,32 @@
+---
+# tests/destroy.yml
+#
+# Wraps destroy.yml so it reads and writes under artifacts/: the first play
+# loads tests/vars/output.yml and copies the output paths into set_fact,
+# which outranks the vars_files in destroy.yml; the second play is
+# destroy.yml itself, unchanged. Run from the repository root:
+#
+#   PATH="$PWD/tests/bin:$PATH" ansible-playbook -i localhost, -c local \
+#     tests/destroy.yml -e hostname=rn-test-incus-exec
+
+- name: Point destroy.yml at the test outputs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/defaults.yml
+    - vars/output.yml
+
+  tasks:
+    - name: Point every output path into artifacts/
+      ansible.builtin.set_fact:
+        raw_node_root: "{{ raw_node_root }}"
+        raw_node_registry_files: "{{ raw_node_registry_files }}"
+        raw_node_records_path: "{{ raw_node_records_path }}"
+        raw_node_reports_path: "{{ raw_node_reports_path }}"
+        raw_node_logs_path: "{{ raw_node_logs_path }}"
+        raw_node_secrets_path: "{{ raw_node_secrets_path }}"
+
+- name: Destroy
+  ansible.builtin.import_playbook: ../destroy.yml
