@@ -216,7 +216,7 @@ The design is recorded in three versioned documents, which are the authority whe
 
 - *Collapse Strategy for a Raw Node Controller* (`en/docs/collapsable-strategy-for-a-raw-node-controller-v0.1.11.md`): scope, strategies, transports, per-platform issue analysis, failure handling, credential exposure and the phone-home design.
 - *The Platform Registry* (`en/docs/1-the-platform-registry-v0.1.5.md`): registry fields, contents, layering, validation and the consumer logic.
-- *Raw Node Controller Layout Design* (`en/docs/design/raw-node-controller-layout-design-v0.1.8.md`): how the controller is laid out on disk, which parts are task files and which are roles, the output directories and secrets path, the step contracts, variable naming, and the migration from the old layout.
+- *Raw Node Controller Layout Design* (`en/docs/design/raw-node-controller-layout-design-v0.1.9.md`): how the controller is laid out on disk, which parts are task files and which are roles, the output directories and secrets path, the step contracts, the obligations every transport meets, and variable naming.
 
 Working sessions are recorded in `en/docs/sessions/`.
 
