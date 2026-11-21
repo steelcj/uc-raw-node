@@ -16,10 +16,10 @@ The controller pipeline is in place: `build.yml` runs end to end, with the attem
 | Platform registry and `validate_registry.yml` | Done, tested |
 | Contract input checking (`load_input.yml`) | Done, tested |
 | Output paths, secrets checks (`prepare_paths.yml`) and attempt record | Done, tested |
-| `raw_node_transport_incus_exec`, with ownership marker, `address.yml` and `destroy.yml` | Done, tested with a stand-in Incus client; real Incus host run: see the latest session record |
+| `raw_node_transport_incus_exec`, with ownership marker, `address.yml` and `destroy.yml` | Done, tested with a stand-in Incus client and on a real Incus host (Debian 13 container) |
 | Address report (`wait_phone_home.yml`, transport source) | Done, tested |
-| Confirmation and failure handling | Done, tested with a stand-in Incus client |
-| Standalone teardown (`destroy.yml`) | Done, tested with a stand-in Incus client |
+| Confirmation and failure handling | Done, tested with a stand-in Incus client and on a real Incus host |
+| Standalone teardown (`destroy.yml`) | Done, tested with a stand-in Incus client and on a real Incus host |
 | `payload.yml` (renders `raw-node-firstboot`) | Placeholder: fails "not implemented yet" |
 | `raw_node_validator` | Placeholder: fails "not implemented yet" |
 | Phone-home receiver | Not started |
