@@ -1,0 +1,81 @@
+# tasks/wait_phone_home.yml
+#
+# Produces the node's address and SSH host keys for the validator, or fails.
+#
+# First release: the transport source only. If the registry entry has
+# reports_address: true and the transport role has tasks/address.yml, the
+# address comes from the transport, bounded by raw_node_report_timeout.
+# Otherwise the step fails: the phone-home receiver is not implemented yet.
+#
+# On success writes reports/<hostname>/report.yml (addresses, SSH host
+# public keys, source, time received) and sets raw_node_report_*.
+# On timeout sets raw_node_report_status to no_report and fails with a
+# message naming the timeout and the source; handle_failure.yml records the
+# reason as no_report.
+
+- name: Look for the transport's address task file
+  ansible.builtin.stat:
+    path: "{{ raw_node_root }}/roles/raw_node_transport_{{ raw_node_platform.transport }}/tasks/address.yml"
+  register: raw_node_report_address_task
+
+- name: Choose the report source
+  ansible.builtin.set_fact:
+    raw_node_report_source: >-
+      {{ 'transport'
+         if (raw_node_platform.reports_address | bool) and raw_node_report_address_task.stat.exists
+         else 'phone_home' }}
+    raw_node_report_status: waiting
+
+- name: Stop, the phone-home receiver is not implemented yet
+  ansible.builtin.fail:
+    msg: >-
+      Platform '{{ target_platform }}' needs a phone-home report (reports_address
+      is {{ raw_node_platform.reports_address }}, and transport
+      '{{ raw_node_platform.transport }}'
+      {{ 'has' if raw_node_report_address_task.stat.exists else 'has no' }}
+      tasks/address.yml), but the phone-home receiver is not implemented yet.
+  when: raw_node_report_source == 'phone_home'
+
+- name: Ask the transport for the address
+  ansible.builtin.include_role:
+    name: "raw_node_transport_{{ raw_node_platform.transport }}"
+    tasks_from: address
+
+- name: Fail if no address was reported in time
+  when: not (raw_node_transport_address.found | default(false) | bool)
+  block:
+    - name: Note that no report arrived
+      ansible.builtin.set_fact:
+        raw_node_report_status: no_report
+
+    - name: Fail on missing report
+      ansible.builtin.fail:
+        msg: >-
+          no address report for {{ raw_node_hostname }} from the
+          {{ raw_node_platform.transport }} transport within
+          {{ raw_node_report_timeout }} seconds
+
+- name: Set the report
+  ansible.builtin.set_fact:
+    raw_node_report_status: received
+    raw_node_report_received: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+    raw_node_report_ipv4: "{{ raw_node_transport_address.ipv4 }}"
+    raw_node_report_ipv6: "{{ raw_node_transport_address.ipv6 }}"
+    raw_node_report_ssh_host_keys: "{{ raw_node_transport_address.ssh_host_keys }}"
+    raw_node_report_file: "{{ raw_node_reports_dir }}/{{ raw_node_hostname }}/report.yml"
+
+- name: Write the report
+  ansible.builtin.copy:
+    dest: "{{ raw_node_report_file }}"
+    mode: "0644"
+    content: |
+      # Address report written by uc-raw-node. Public data only.
+      {{ raw_node_report | to_nice_yaml(indent=2, sort_keys=false) }}
+  vars:
+    raw_node_report:
+      hostname: "{{ raw_node_hostname }}"
+      source: "{{ raw_node_report_source }}"
+      received: "{{ raw_node_report_received }}"
+      ipv4: "{{ raw_node_report_ipv4 }}"
+      ipv6: "{{ raw_node_report_ipv6 }}"
+      ssh_host_keys: "{{ raw_node_report_ssh_host_keys }}"

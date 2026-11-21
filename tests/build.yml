@@ -1,0 +1,78 @@
+---
+# tests/build.yml
+#
+# Wraps build.yml with the test overrides. The first play points every
+# output path into artifacts/ (tests/vars/output.yml) and sets the
+# overrides with set_fact, which outranks the vars_files in build.yml; the
+# second play is build.yml itself, unchanged. Run from the repository root.
+#
+# raw_node_test_scenario chooses what the run does:
+#   success           stand-in payload, validation skipped: the node is
+#                     confirmed and left running
+#   payload_failure   stand-in payload that exits 3: rescue path, destroyed
+#   teardown_failure  as payload_failure, and the stand-in Incus client
+#                     fails on delete: quarantined (stand-in client only)
+#   placeholders      no overrides: payload.yml fails "not implemented yet"
+#
+#   PATH="$PWD/tests/bin:$PATH" ansible-playbook -i localhost, -c local \
+#     tests/build.yml -e raw_node_test_scenario=success
+#
+# tests/build_scenarios.yml runs every scenario and checks the results.
+
+- name: Point the build at the test outputs and set the test overrides
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/defaults.yml
+    - vars/output.yml
+
+  vars:
+    raw_node_test_scenario: success
+    raw_node_test_payloads:
+      success: "{{ playbook_dir }}/fixtures/raw-node-firstboot"
+      payload_failure: "{{ playbook_dir }}/fixtures/raw-node-firstboot-fail"
+      teardown_failure: "{{ playbook_dir }}/fixtures/raw-node-firstboot-fail"
+    raw_node_test_fail_delete_flag: "{{ lookup('ansible.builtin.env', 'FAKE_INCUS_STATE') | default(playbook_dir ~ '/../artifacts/fake-incus.json', true) }}.fail-delete"
+
+  tasks:
+    - name: Check the scenario
+      ansible.builtin.assert:
+        that:
+          - raw_node_test_scenario in ['success', 'payload_failure', 'teardown_failure', 'placeholders']
+        fail_msg: "Unknown raw_node_test_scenario '{{ raw_node_test_scenario }}'."
+        quiet: true
+
+    - name: Point every output path into artifacts/
+      ansible.builtin.set_fact:
+        raw_node_root: "{{ raw_node_root }}"
+        raw_node_registry_files: "{{ raw_node_registry_files }}"
+        raw_node_records_path: "{{ raw_node_records_path }}"
+        raw_node_reports_path: "{{ raw_node_reports_path }}"
+        raw_node_logs_path: "{{ raw_node_logs_path }}"
+        raw_node_secrets_path: "{{ raw_node_secrets_path }}"
+        target_platform: "{{ target_platform | default('incus_container_default') }}"
+        raw_node_input_file: "{{ playbook_dir }}/fixtures/raw-node-input.yml"
+
+    - name: Set the test-only overrides
+      ansible.builtin.set_fact:
+        raw_node_test_payload_file: "{{ raw_node_test_payloads[raw_node_test_scenario] }}"
+        raw_node_test_skip_validation: true
+      when: raw_node_test_scenario != 'placeholders'
+
+    - name: Make the stand-in Incus client fail on delete
+      ansible.builtin.copy:
+        dest: "{{ raw_node_test_fail_delete_flag }}"
+        content: "1\n"
+        mode: "0600"
+      when: raw_node_test_scenario == 'teardown_failure'
+
+    - name: Let the stand-in Incus client delete again
+      ansible.builtin.file:
+        path: "{{ raw_node_test_fail_delete_flag }}"
+        state: absent
+      when: raw_node_test_scenario != 'teardown_failure'
+
+- name: Build
+  ansible.builtin.import_playbook: ../build.yml

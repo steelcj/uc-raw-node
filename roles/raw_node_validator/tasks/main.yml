@@ -1,0 +1,29 @@
+# roles/raw_node_validator/tasks/main.yml
+#
+# PLACEHOLDER. Will check the RN-* clauses on the built node, using the
+# address and SSH host keys from wait_phone_home.yml (raw_node_report_*).
+# Not written yet.
+#
+# Until then this role fails with "not implemented yet", unless the
+# test-only override raw_node_test_skip_validation is true, which lets
+# tests/build.yml exercise the rest of the pipeline. It is set only by tests
+# and is not a feature.
+#
+# Sets raw_node_validation_status.
+
+- name: Stop, contract validation is not implemented yet
+  ansible.builtin.fail:
+    msg: >-
+      raw_node_validator is not implemented yet: no RN-* clause can be
+      checked, so the node cannot be confirmed.
+  when: not (raw_node_test_skip_validation | default(false) | bool)
+
+- name: Note that validation was skipped by a test override
+  ansible.builtin.debug:
+    msg: >-
+      TEST OVERRIDE: raw_node_test_skip_validation is true, so no RN-*
+      clause was checked. This node is not a raw node.
+
+- name: Record the validation status
+  ansible.builtin.set_fact:
+    raw_node_validation_status: skipped_by_test_override

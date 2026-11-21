@@ -1,0 +1,168 @@
+# tests/tasks/build_scenario.yml
+#
+# One scenario of tests/build_scenarios.yml.
+
+- name: "Start {{ raw_node_test_scenario }} from empty output directories"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ raw_node_test_records }}"
+    - "{{ raw_node_test_reports }}"
+    - "{{ raw_node_test_logs }}"
+    - "{{ raw_node_test_secrets }}"
+
+- name: "Run tests/build.yml for {{ raw_node_test_scenario }}"
+  ansible.builtin.command:
+    argv: >-
+      {{ ['ansible-playbook', '-i', 'localhost,', '-c', 'local',
+          playbook_dir ~ '/build.yml', '-e', 'raw_node_test_scenario=' ~ raw_node_test_scenario]
+         + raw_node_test_extra_args }}
+    chdir: "{{ playbook_dir }}/.."
+  environment:
+    PATH: "{{ raw_node_test_path }}"
+    ANSIBLE_NOCOLOR: "1"
+  register: raw_node_test_run
+  changed_when: true
+  failed_when: false
+
+- name: Read what the run left behind
+  ansible.builtin.set_fact:
+    raw_node_test_attempt: "{{ lookup('ansible.builtin.file', raw_node_test_records ~ '/attempt.yml', errors='ignore') | default('', true) | from_yaml }}"
+    raw_node_test_failure: "{{ lookup('ansible.builtin.file', raw_node_test_records ~ '/failure.yml', errors='ignore') | default('', true) | from_yaml }}"
+    raw_node_test_confirmation: "{{ lookup('ansible.builtin.file', raw_node_test_records ~ '/confirmation.yml', errors='ignore') | default('', true) | from_yaml }}"
+    raw_node_test_report: "{{ lookup('ansible.builtin.file', raw_node_test_reports ~ '/report.yml', errors='ignore') | default('', true) | from_yaml }}"
+    raw_node_test_runlog: "{{ lookup('ansible.builtin.file', raw_node_test_logs ~ '/incus_exec-run.log', errors='ignore') | default('', true) }}"
+    raw_node_test_console: "{{ raw_node_test_run.stdout ~ raw_node_test_run.stderr }}"
+
+- name: Look for files left in the node's secrets directory
+  ansible.builtin.find:
+    paths: "{{ raw_node_test_secrets }}"
+    hidden: true
+  register: raw_node_test_secret_files
+
+- name: Look up the test instance
+  ansible.builtin.command:
+    argv: [incus, list, "--project={{ raw_node_test_project }}", --format=json]
+  environment:
+    PATH: "{{ raw_node_test_path }}"
+  register: raw_node_test_instances
+  changed_when: false
+
+- name: Grep the output directories for the fixture's contract values
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -rlE
+      - "{{ raw_node_test_secret_pattern }}"
+      - "{{ raw_node_records_path }}"
+      - "{{ raw_node_reports_path }}"
+      - "{{ raw_node_logs_path }}"
+      - "{{ raw_node_secrets_path }}"
+  register: raw_node_test_grep
+  changed_when: false
+  failed_when: raw_node_test_grep.rc not in [0, 1]
+
+- name: Check whether the test instance exists
+  ansible.builtin.set_fact:
+    raw_node_test_exists: >-
+      {{ raw_node_test_instances.stdout | from_json
+         | selectattr('name', 'equalto', raw_node_test_hostname) | list | length > 0 }}
+
+- name: Clean up the instance the scenario left
+  when: raw_node_test_exists | bool
+  block:
+    - name: Let the stand-in client delete again
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../artifacts/fake-incus.json.fail-delete"
+        state: absent
+
+    - name: Delete the test instance
+      ansible.builtin.command:
+        argv: [incus, delete, --force, "--project={{ raw_node_test_project }}", "{{ raw_node_test_hostname }}"]
+      environment:
+        PATH: "{{ raw_node_test_path }}"
+      changed_when: true
+
+- name: "Check the common results of {{ raw_node_test_scenario }}"
+  ansible.builtin.assert:
+    that:
+      - raw_node_test_grep.rc == 1
+      - raw_node_test_console is not search(raw_node_test_secret_pattern)
+      - raw_node_test_secret_files.matched == 0
+    fail_msg: >-
+      {{ raw_node_test_scenario }}: contract values found in
+      {{ raw_node_test_grep.stdout_lines | default([]) }} or in the console
+      output, or files left in the secrets directory
+      ({{ raw_node_test_secret_files.matched }}).
+    quiet: true
+
+- name: Check the success scenario
+  ansible.builtin.assert:
+    that:
+      - raw_node_test_run.rc == 0
+      - raw_node_test_attempt.state == 'confirmed'
+      - raw_node_test_failure == none
+      - raw_node_test_confirmation[raw_node_test_hostname].ip | length > 0
+      - raw_node_test_confirmation[raw_node_test_hostname].user == 'initial'
+      - raw_node_test_confirmation[raw_node_test_hostname].sudo
+      - raw_node_test_report.source == 'transport'
+      - raw_node_test_report.ipv4 | length > 0
+      - raw_node_test_exists | bool
+    fail_msg: "success: {{ raw_node_test_console[-1500:] }}"
+    quiet: true
+  when: raw_node_test_scenario == 'success'
+
+- name: Check the payload failure scenario
+  ansible.builtin.assert:
+    that:
+      - raw_node_test_run.rc != 0
+      - raw_node_test_attempt.state == 'destroyed'
+      - raw_node_test_failure.failed_task == 'Fail on payload'
+      - "'Run payload once' in raw_node_test_failure.reason"
+      - "'exited with 3' in raw_node_test_failure.reason"
+      - "'STAND-IN' not in (raw_node_test_failure | to_json)"
+      - raw_node_test_failure.action == 'destroy'
+      - raw_node_test_failure.teardown_error is not defined
+      - raw_node_test_confirmation == none
+      - "'STAND-IN-PAYLOAD-OUTPUT' in raw_node_test_runlog"
+      - raw_node_test_console is search('Build of ' ~ raw_node_test_hostname ~ ' failed at .Fail on payload.')
+      - raw_node_test_console is search('exited with 3')
+      - not (raw_node_test_exists | bool)
+    fail_msg: "payload_failure: {{ raw_node_test_failure }} {{ raw_node_test_console[-1500:] }}"
+    quiet: true
+  when: raw_node_test_scenario == 'payload_failure'
+
+- name: Check the teardown failure scenario
+  ansible.builtin.assert:
+    that:
+      - raw_node_test_run.rc != 0
+      - raw_node_test_attempt.state == 'quarantined'
+      - "'exited with 3' in raw_node_test_failure.reason"
+      - raw_node_test_failure.action == 'quarantine'
+      - "'stand-in delete failure' in raw_node_test_failure.teardown_error.platform_error"
+      - raw_node_test_console is search('Build of ' ~ raw_node_test_hostname ~ ' failed at .Fail on payload.')
+      - raw_node_test_exists | bool
+    fail_msg: "teardown_failure: {{ raw_node_test_failure }} {{ raw_node_test_console[-1500:] }}"
+    quiet: true
+  when: raw_node_test_scenario == 'teardown_failure'
+
+- name: Check the placeholders scenario
+  ansible.builtin.assert:
+    that:
+      - raw_node_test_run.rc != 0
+      - raw_node_test_attempt.state == 'destroyed'
+      - raw_node_test_failure.failed_task == 'Stop, payload rendering is not implemented yet'
+      - "'not implemented yet' in raw_node_test_failure.reason"
+      - raw_node_test_console is search('not implemented yet')
+      - not (raw_node_test_exists | bool)
+    fail_msg: "placeholders: {{ raw_node_test_failure }} {{ raw_node_test_console[-1500:] }}"
+    quiet: true
+  when: raw_node_test_scenario == 'placeholders'
+
+- name: Collect the scenario result
+  ansible.builtin.set_fact:
+    raw_node_test_results: >-
+      {{ raw_node_test_results + [raw_node_test_scenario ~ ': rc ' ~ raw_node_test_run.rc
+         ~ ', attempt ' ~ (raw_node_test_attempt.state | default('none'))
+         ~ ', instance ' ~ ('kept' if raw_node_test_exists | bool else 'gone')] }}

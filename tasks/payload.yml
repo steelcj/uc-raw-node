@@ -1,0 +1,46 @@
+# tasks/payload.yml
+#
+# PLACEHOLDER. Will render raw-node-firstboot (the adopt payload format)
+# into <raw_node_secrets_dir>/<hostname>/raw-node-firstboot. Not written
+# yet: the template needs the RN-* clauses pinned down.
+#
+# Until then this step fails with "not implemented yet", which exercises the
+# rescue path, unless the test-only override raw_node_test_payload_file is
+# set. That override copies a stand-in payload into the secrets directory so
+# the rest of the pipeline can be tested. It is set only by tests/build.yml
+# and is not a feature.
+#
+# Sets raw_node_payload_file.
+
+- name: Stop, payload rendering is not implemented yet
+  ansible.builtin.fail:
+    msg: >-
+      payload.yml is not implemented yet: rendering raw-node-firstboot needs
+      the RN-* clauses pinned down. Nothing was delivered.
+  when: raw_node_test_payload_file is not defined
+
+- name: Set payload location
+  ansible.builtin.set_fact:
+    raw_node_payload_file: "{{ raw_node_secrets_dir }}/{{ raw_node_hostname }}/raw-node-firstboot"
+  no_log: true
+
+- name: Copy the test-only stand-in payload
+  block:
+    - name: Copy the test-only stand-in payload into the secrets directory
+      ansible.builtin.copy:
+        src: "{{ raw_node_test_payload_file }}"
+        dest: "{{ raw_node_payload_file }}"
+        mode: "0600"
+      no_log: true
+
+  rescue:
+    - name: Set failure reason for the payload copy
+      ansible.builtin.set_fact:
+        raw_node_failure_reason: >-
+          payload.yml step 'Copy the test-only stand-in payload into the
+          secrets directory' failed. Output hidden because it names the
+          secrets path.
+
+    - name: Fail on payload copy
+      ansible.builtin.fail:
+        msg: "{{ raw_node_failure_reason }}"
