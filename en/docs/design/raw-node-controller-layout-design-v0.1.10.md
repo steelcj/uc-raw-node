@@ -1,6 +1,6 @@
 # Raw Node Controller Layout Design
 
-- **Version:** 0.1.9
+- **Version:** 0.1.10
 - **Date:** 2026-11-21
 - **License:** Proprietary / Internal Use Only
 - **Author:** Christopher Steel
@@ -348,7 +348,8 @@ The repository uses the `raw_node_` namespace. Within it, a second prefix names 
 | Prefix | Set by |
 | :-- | :-- |
 | `raw_node_registry_*` | `validate_registry.yml`, `load_registry_layer.yml` |
-| `raw_node_input`, `raw_node_hostname` | `load_input.yml` |
+| `raw_node_input` | `load_input.yml` |
+| `raw_node_hostname` | `load_input.yml`, and `destroy.yml` from `-e hostname`, since it loads no contract input |
 | `raw_node_platform`, `raw_node_delivery_strategy` | `resolve_platform.yml` |
 | `raw_node_*_dir` (expanded paths), `raw_node_paths_*` (working values) | `prepare_paths.yml` |
 | `raw_node_attempt_*` | `write_attempt.yml`, `set_attempt_state.yml` |
@@ -359,8 +360,10 @@ The repository uses the `raw_node_` namespace. Within it, a second prefix names 
 | `raw_node_validation_*` | `raw_node_validator` |
 | `raw_node_failure_reason` | Any step inside the block that fails after a `no_log` task |
 | Other `raw_node_failure_*` | `handle_failure.yml` |
-| `raw_node_destroy_standalone` | `destroy.yml` only |
+| `raw_node_destroy_*`, including `raw_node_destroy_standalone` | `destroy.yml` only |
 | `raw_node_test_*` | Test wrappers only |
+
+Two names outside the namespace are operator inputs rather than step variables: `hostname` and `target_platform`. No step sets them, with one exception: `destroy.yml` sets `target_platform` from the attempt record when it was not given with `-e`.
 
 The output path settings (`raw_node_records_path`, `raw_node_reports_path`, `raw_node_logs_path`, `raw_node_secrets_path`) come from `vars/defaults.yml`. Because a `set_fact` cannot override a value given with `-e`, `prepare_paths.yml` sets the expanded paths under separate names (`raw_node_records_dir`, `raw_node_reports_dir`, `raw_node_logs_dir`, `raw_node_secrets_dir`), and later steps read only those. Existing variable names that already work are not renamed just to fit the table.
 
@@ -373,9 +376,9 @@ Nothing enforces the prefixes. The two kinds of mistake behave differently:
 - **A typo** (`raw_node_platfrm` for `raw_node_platform`) is read as an undefined variable and fails loudly at run time.
 - **A collision** (two steps setting `raw_node_payload_path` with different meanings) fails silently: the later value wins and the earlier step's consumers read the wrong thing.
 
-A CI check makes the rule mechanical: list every variable set by `set_fact` or `register` in `tasks/` and `roles/`, and fail if one does not match a prefix in the table, or if the same name is set in more than one file. `raw_node_failure_reason` is the one name the table allows to be set from several files. The same check guards the secret-handling rules: it flags any task whose arguments refer to the secrets path, the payload or the token and that does not carry `no_log: true`, and any `set -x` in the payload template.
+A CI check makes the rule mechanical: list every variable set by `set_fact` or `register` in `tasks/`, `roles/` and the entry playbooks (`build.yml`, `validate.yml`, `destroy.yml`), and fail if one does not match a row in the table, or if the same name is set in a file the table does not list for its row. A name may therefore be set from several files only where its row lists them: `raw_node_hostname` (`load_input.yml` and `destroy.yml`), `raw_node_attempt_*` (`write_attempt.yml` and `set_attempt_state.yml`), and `raw_node_failure_reason`, which any step inside the block may set. The only unprefixed name the check accepts is `target_platform`, set by `destroy.yml`. The same check guards the secret-handling rules: it flags any task whose arguments refer to the secrets path, the payload or the token and that does not carry `no_log: true`, and any `set -x` in the payload template.
 
-The trigger for writing it was around 15 to 20 variables set across the task files and roles. The migration brought the count to 22, so the trigger has been reached, and the check is the next piece of work after the follow-ups above rather than a deferred item.
+The trigger for writing it was around 15 to 20 variables set across the task files and roles. After the migration, 60 distinct names are set in `tasks/` and `roles/`, and 63 with the entry playbooks, well past the trigger, so the check is the next piece of work after the follow-ups above rather than a deferred item.
 
 ### Contract input and precedence
 
@@ -420,6 +423,12 @@ Promoting a task file to a role is mostly mechanical: the file becomes `roles/<n
 
 ## Changes
 
+### From v0.1.9 to v0.1.10
+
+- Corrected the count of variables set after the migration from 22 to 60 in `tasks/` and `roles/` (63 with the entry playbooks), counted by the document's own rule.
+- Made the CI check scan the entry playbooks too, and allow a name to be set from several files only where its row in the naming table lists them, since `raw_node_hostname` and `raw_node_attempt_*` are legitimately set in two files each.
+- Added `destroy.yml` as a setter of `raw_node_hostname`, widened its row to `raw_node_destroy_*`, and stated that `hostname` and `target_platform` are operator inputs that no step sets, except `destroy.yml` setting `target_platform` from the attempt record.
+
 ### From v0.1.8 to v0.1.9
 
 - Recorded that the migration from the `raw_node_controller` role is complete (branch `layout-migration`, pull request 1), and removed the Migration section, as v0.1.8 required. The procedure and the documents it updated (strategy v0.1.11, registry v0.1.5, the README) are in the session record `en/docs/sessions/2026-11-21--11-06-57-session.md`, and the layout before the migration is tagged `v0.1.0`.
@@ -432,13 +441,8 @@ Promoting a task file to a role is mostly mechanical: the file becomes `roles/<n
 - Specified `destroy.yml`'s handling of a missing platform and of a record that disagrees with `-e target_platform`, and that it runs `prepare_paths.yml`.
 - Added the no-checkout case to the repository check, directory and file modes, and masked assertion messages.
 - Added the test wrapper pattern, the `fail_msg` templating behaviour, the tested ansible-core version, and the Phase 7 timing for the report timeout.
-- Moved the CI check for variable prefixes and secret handling out of the deferred table, since the count of variables set (22) has passed its trigger, and added four deferred items found during the migration.
+- Moved the CI check for variable prefixes and secret handling out of the deferred table, since the count of variables set has passed its trigger, and added four deferred items found during the migration.
 - Trimmed the Changes section to its two most recent entries, as v0.1.8 required; git history holds the rest.
-
-### From v0.1.7 to v0.1.8
-
-- Spelled out the secrets path check as two steps: inside the repository by comparing resolved paths, then ignored by `git check-ignore -q` on a file path inside the directory, with exit code 1 and any error code both stopping the run.
-- Replaced the reference to sat-doc-automa, which is being retired, with a concrete trimming rule (keep the two most recent entries), to be replaced by the rule in the new document conventions once they define one.
 
 ## References
 
